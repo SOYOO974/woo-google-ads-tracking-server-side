@@ -50,7 +50,8 @@ class Woo_Gads
         $this->loader->add_action('woocommerce_checkout_update_order_meta', $plugin_public, 'save_click_ids', 10, 2);
 
         $plugin_api = new Woo_Gads_Api();
-        // Hook into order status processing and completed
+        // Hook into order status processing, completed, and on-hold
+        $this->loader->add_action('woocommerce_order_status_on-hold', $plugin_api, 'trigger_conversion');
         $this->loader->add_action('woocommerce_order_status_processing', $plugin_api, 'trigger_conversion');
         $this->loader->add_action('woocommerce_order_status_completed', $plugin_api, 'trigger_conversion');
     }

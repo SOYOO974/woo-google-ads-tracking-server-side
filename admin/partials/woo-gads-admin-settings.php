@@ -179,6 +179,7 @@ $settings = get_option('woo_gads_settings');
             <th scope="row">Statut de commande déclencheur</th>
             <td>
                 <select name="woo_gads_settings[order_status]">
+                    <option value="on-hold" <?php selected($settings['order_status'] ?? 'processing', 'on-hold'); ?>>En attente (On hold)</option>
                     <option value="processing" <?php selected($settings['order_status'] ?? 'processing', 'processing'); ?>>En cours (Processing)</option>
                     <option value="completed" <?php selected($settings['order_status'] ?? 'processing', 'completed'); ?>>Terminée (Completed)</option>
                 </select>

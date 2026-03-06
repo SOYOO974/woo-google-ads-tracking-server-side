@@ -13,13 +13,6 @@ class Woo_Gads_Api
 
         $settings = get_option('woo_gads_settings');
 
-        // Consent check
-        $consent_cookie = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
-        if (!isset($_COOKIE[$consent_cookie]) || empty($_COOKIE[$consent_cookie])) {
-            // No consent, no tracking
-            return;
-        }
-
         // Only process on the specified status to avoid double processing if order is completed from processing
         $target_status = isset($settings['order_status']) ? $settings['order_status'] : 'processing';
         $order = wc_get_order($order_id);
@@ -27,6 +20,31 @@ class Woo_Gads_Api
         if (!$order || $order->get_status() !== $target_status) {
             return;
         }
+
+        // Consent Moder v2 check
+        $consent_cookie = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
+        $marketing_consent = false;
+
+        // Try to read from $_COOKIE first (if triggered synchronously during checkout)
+        // Fallback to order meta (if triggered asynchronously via webhook)
+        $cookie_value = null;
+        if (isset($_COOKIE[$consent_cookie]) && !empty($_COOKIE[$consent_cookie])) {
+            $cookie_value = stripslashes($_COOKIE[$consent_cookie]);
+        } else {
+            $meta_cookie = get_post_meta($order_id, '_woo_gads_consent', true);
+            if ($meta_cookie && $meta_cookie !== 'no_cookie_found') {
+                $cookie_value = html_entity_decode($meta_cookie, ENT_QUOTES); // Decode if sanitized as text field
+            }
+        }
+
+        if ($cookie_value) {
+            $cookie_data = json_decode($cookie_value, true);
+            if (is_array($cookie_data) && isset($cookie_data['marketing']) && $cookie_data['marketing'] === true) {
+                $marketing_consent = true;
+            }
+        }
+
+        $consent_log_msg = $marketing_consent ? 'Envoi avec données clients (GRANTED)' : 'Envoi anonymisé (DENIED - Cookie absent/refusé)';
 
         // Extract settings
         $developer_token = isset($settings['developer_token']) ? $settings['developer_token'] : '';
@@ -47,7 +65,7 @@ class Woo_Gads_Api
         }
 
         // Build Payload
-        $payload = $this->build_payload($order, $merchant_id, $conversion_action_id);
+        $payload = $this->build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent);
 
         if (!$payload) {
             // Missing essential click IDs
@@ -74,11 +92,12 @@ class Woo_Gads_Api
 
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
-            Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $error_message);
+            Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . ' | Erreur HTTP: ' . $error_message);
             update_post_meta($order_id, '_gads_api_sent', 'Failed: ' . $error_message);
         } else {
             // Success or logical failure
-            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, json_decode($body, true), '');
+            $error_col = ($http_status != 200) ? 'Erreur API' : '';
+            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, json_decode($body, true), $consent_log_msg . ($error_col ? ' | ' . $error_col : ''));
             if ($http_status == 200) {
                 update_post_meta($order_id, '_gads_api_sent', '1');
             } else {
@@ -87,7 +106,7 @@ class Woo_Gads_Api
         }
     }
 
-    private function build_payload($order, $merchant_id, $conversion_action_id)
+    private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent)
     {
         $order_id = $order->get_id();
         $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);
@@ -116,48 +135,55 @@ class Woo_Gads_Api
             $conversion['gbraid'] = $gbraid;
         }
 
-        // Enhanced Conversions User Data
-        $user_identifier = array();
+        // Consent Mode v2 Object
+        $conversion['consent'] = array(
+            'adUserData' => $marketing_consent ? 'GRANTED' : 'DENIED',
+            'adPersonalization' => $marketing_consent ? 'GRANTED' : 'DENIED'
+        );
 
-        $email = $order->get_billing_email();
-        if (!empty($email)) {
-            $user_identifier[] = array(
-                'hashedEmail' => hash('sha256', strtolower(trim($email)))
-            );
-        }
+        // Enhanced Conversions User Data (Only if Consent is GRANTED)
+        if ($marketing_consent) {
+            $user_identifier = array();
 
-        $phone = $order->get_billing_phone();
-        if (!empty($phone)) {
-            $clean_phone = ltrim(trim($phone), '+');
-            $user_identifier[] = array(
-                'hashedPhoneNumber' => hash('sha256', $clean_phone)
-            );
-        }
-
-        $first_name = $order->get_billing_first_name();
-        $last_name = $order->get_billing_last_name();
-
-        if (!empty($first_name) && !empty($last_name)) {
-            $address = array(
-                'hashedFirstName' => hash('sha256', strtolower(trim($first_name))),
-                'hashedLastName' => hash('sha256', strtolower(trim($last_name))),
-            );
-
-            // Google Ads requires at least hashedFirstName, hashedLastName, countryCode, and postalCode for address if provided
-            $country = $order->get_billing_country();
-            $zip = $order->get_billing_postcode();
-
-            if (!empty($country) && !empty($zip)) {
-                $address['countryCode'] = $country;
-                $address['postalCode'] = $zip;
+            $email = $order->get_billing_email();
+            if (!empty($email)) {
                 $user_identifier[] = array(
-                    'addressInfo' => $address
+                    'hashedEmail' => hash('sha256', strtolower(trim($email)))
                 );
             }
-        }
 
-        if (!empty($user_identifier)) {
-            $conversion['userIdentifiers'] = $user_identifier;
+            $phone = $order->get_billing_phone();
+            if (!empty($phone)) {
+                $clean_phone = ltrim(trim($phone), '+');
+                $user_identifier[] = array(
+                    'hashedPhoneNumber' => hash('sha256', $clean_phone)
+                );
+            }
+
+            $first_name = $order->get_billing_first_name();
+            $last_name = $order->get_billing_last_name();
+
+            if (!empty($first_name) && !empty($last_name)) {
+                $address = array(
+                    'hashedFirstName' => hash('sha256', strtolower(trim($first_name))),
+                    'hashedLastName' => hash('sha256', strtolower(trim($last_name))),
+                );
+
+                $country = $order->get_billing_country();
+                $zip = $order->get_billing_postcode();
+
+                if (!empty($country) && !empty($zip)) {
+                    $address['countryCode'] = $country;
+                    $address['postalCode'] = $zip;
+                    $user_identifier[] = array(
+                        'addressInfo' => $address
+                    );
+                }
+            }
+
+            if (!empty($user_identifier)) {
+                $conversion['userIdentifiers'] = $user_identifier;
+            }
         }
 
         return array(

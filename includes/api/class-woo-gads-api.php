@@ -57,7 +57,7 @@ class Woo_Gads_Api
 
         // Extract settings
         $developer_token = isset($settings['developer_token']) ? $settings['developer_token'] : '';
-        $merchant_id = isset($settings['merchant_id']) ? $settings['merchant_id'] : '';
+        $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', $settings['merchant_id']) : '';
         $conversion_action_id = isset($settings['conversion_action_id']) ? $settings['conversion_action_id'] : '';
 
         if (empty($developer_token) || empty($merchant_id) || empty($conversion_action_id)) {

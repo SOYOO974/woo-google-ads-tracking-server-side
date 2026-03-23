@@ -187,6 +187,19 @@ $settings = get_option('woo_gads_settings');
                     contactée.</p>
             </td>
         </tr>
+        <tr>
+            <th scope="row">Alertes Email</th>
+            <td>
+                <label>
+                    <input type="checkbox" name="woo_gads_settings[enable_email_alerts]" value="1" <?php checked(isset($settings['enable_email_alerts']) ? $settings['enable_email_alerts'] : 0, 1); ?> />
+                    Activer les alertes par email en cas d'erreur API
+                </label>
+                <div style="margin-top: 10px;">
+                    <input type="email" name="woo_gads_settings[alert_email]" value="<?php echo esc_attr($settings['alert_email'] ?? get_option('admin_email')); ?>" class="regular-text" placeholder="Email pour les alertes" />
+                    <p class="description">Email qui recevra les notifications d'échec de la transmission à Google Ads.</p>
+                </div>
+            </td>
+        </tr>
     </table>
 
     <?php submit_button('Enregistrer les modifications'); ?>

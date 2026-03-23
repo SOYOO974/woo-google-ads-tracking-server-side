@@ -72,6 +72,7 @@ class Woo_Gads_Api
         if (!$access_token) {
             Woo_Gads_Db::insert_log($order_id, 0, 'N/A', 'N/A', 'OAuth Access Token missing');
             update_post_meta($order_id, '_gads_api_status', 'Erreur OAuth');
+            $this->send_error_email($order_id, 'Token OAuth manquant ou expiré. Veuillez vérifier votre connexion dans les réglages du plugin.');
             return;
         }
 
@@ -107,6 +108,7 @@ class Woo_Gads_Api
             Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . ' | Erreur HTTP: ' . $error_message);
             update_post_meta($order_id, '_gads_api_sent', 'Failed: ' . $error_message);
             update_post_meta($order_id, '_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
+            $this->send_error_email($order_id, 'Erreur de requête HTTP cURL/WordPress : ' . $error_message);
         } else {
             // Success or logical failure
             $error_col = ($http_status != 200) ? 'Erreur API' : '';
@@ -117,6 +119,15 @@ class Woo_Gads_Api
             } else {
                 update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);
                 update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ')');
+                
+                $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
+                if (!empty($body)) {
+                    $body_decoded = json_decode($body, true);
+                    if (isset($body_decoded['error']['message'])) {
+                        $error_details .= ' Détails : ' . $body_decoded['error']['message'];
+                    }
+                }
+                $this->send_error_email($order_id, $error_details);
             }
         }
     }
@@ -205,5 +216,33 @@ class Woo_Gads_Api
             'conversions' => array($conversion),
             'partialFailure' => true,
         );
+    }
+
+    private function send_error_email($order_id, $error_message)
+    {
+        $settings = get_option('woo_gads_settings');
+        
+        if (empty($settings['enable_email_alerts']) || $settings['enable_email_alerts'] !== '1') {
+            return;
+        }
+
+        $to = !empty($settings['alert_email']) ? sanitize_email($settings['alert_email']) : get_option('admin_email');
+        if (!is_email($to)) {
+            return;
+        }
+
+        $subject = 'Erreur Google Ads Server-Side - Commande #' . $order_id;
+        
+        $message = "Bonjour,\n\n";
+        $message .= "Une erreur est survenue lors de l'envoi de la conversion pour la commande #" . $order_id . " à l'API Google Ads.\n\n";
+        $message .= "Détails de l'erreur :\n" . $error_message . "\n\n";
+        $message .= "Vous pouvez consulter le tableau de bord (onglet Diagnostic de l'API) pour plus d'informations et réessayer l'envoi manuellement.\n\n";
+        $message .= "Cordialement,\nLe Plugin Woo Google Ads Server-Side";
+
+        $headers = array('Content-Type: text/plain; charset=UTF-8');
+
+        // Prevent multiple emails for the same order if repeatedly retried rapidly (optional, but good practice).
+        // For now, simple email sending.
+        wp_mail($to, $subject, $message, $headers);
     }
 }

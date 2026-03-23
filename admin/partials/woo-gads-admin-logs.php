@@ -172,6 +172,9 @@ $logs = Woo_Gads_Db::get_logs(50);
                             </td>
                             <td>
                                 <strong><?php echo esc_html($api_status); ?></strong>
+                                <div style="margin-top: 5px;">
+                                    <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($order_id); ?>">Renvoyer</button>
+                                </div>
                             </td>
                         </tr>
                         <?php
@@ -238,3 +241,37 @@ $logs = Woo_Gads_Db::get_logs(50);
         </tbody>
     </table>
 </div>
+
+<script type="text/javascript">
+jQuery(document).ready(function ($) {
+    $('.woo-gads-retry-btn').click(function(e) {
+        e.preventDefault();
+        var btn = $(this);
+        var orderId = btn.data('order-id');
+        var originalText = btn.text();
+        
+        if (!confirm('Voulez-vous vraiment forcer le renvoi de cette conversion à Google Ads ?')) {
+            return;
+        }
+        
+        btn.prop('disabled', true).text('Envoi...');
+        
+        $.post(ajaxurl, {
+            action: 'woo_gads_retry_conversion',
+            order_id: orderId,
+            _ajax_nonce: '<?php echo wp_create_nonce("woo_gads_retry"); ?>'
+        }, function(response) {
+            btn.prop('disabled', false).text(originalText);
+            if (response.success) {
+                alert('Commande renvoyée. Vérifiez le nouveau statut.');
+                location.reload();
+            } else {
+                alert('Erreur : ' + (response.data || 'Une erreur est survenue.'));
+            }
+        }).fail(function() {
+            btn.prop('disabled', false).text(originalText);
+            alert('Erreur réseau. Veuillez réessayer.');
+        });
+    });
+});
+</script>

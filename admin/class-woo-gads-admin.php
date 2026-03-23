@@ -79,4 +79,32 @@ class Woo_Gads_Admin
         );
         return array_merge($settings_link, $links);
     }
+
+    public function retry_conversion()
+    {
+        check_ajax_referer('woo_gads_retry', '_ajax_nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error('Permission denied.');
+        }
+
+        $order_id = isset($_POST['order_id']) ? intval($_POST['order_id']) : 0;
+        if (!$order_id) {
+            wp_send_json_error('ID de commande invalide.');
+        }
+
+        // We reset the sent meta so it can be sent again
+        delete_post_meta($order_id, '_gads_api_sent');
+        
+        $api = new Woo_Gads_Api();
+        $api->trigger_conversion($order_id);
+
+        $new_status = get_post_meta($order_id, '_gads_api_status', true);
+        
+        if ($new_status === 'Succès') {
+            wp_send_json_success('Renvoi réussi');
+        } else {
+            wp_send_json_error($new_status);
+        }
+    }
 }

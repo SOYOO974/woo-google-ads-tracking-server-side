@@ -36,39 +36,41 @@ $logs = Woo_Gads_Db::get_logs(50);
 
     <div style="margin-top: 30px; margin-bottom: 30px;">
         <h2>Diagnostic de capture des données (Concord & Identifiants)</h2>
-        
+
         <div class="card" style="max-width: 100%; margin-bottom: 20px;">
             <h3>1. Test de lecture du cookie en direct (Live Browser Test)</h3>
-            <?php 
+            <?php
             $settings = get_option('woo_gads_settings');
             $consent_cookie_name = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
             ?>
-            <p><strong>Nom du cookie à surveiller :</strong> <code><?php echo esc_html($consent_cookie_name); ?></code></p>
-            <div id="woo-gads-cookie-status" style="padding: 10px; border-radius: 4px; display: inline-block; font-weight: bold;">
+            <p><strong>Nom du cookie à surveiller :</strong> <code><?php echo esc_html($consent_cookie_name); ?></code>
+            </p>
+            <div id="woo-gads-cookie-status"
+                style="padding: 10px; border-radius: 4px; display: inline-block; font-weight: bold;">
                 Vérification du cookie en cours...
             </div>
         </div>
 
         <script type="text/javascript">
-        (function($){
-            function getCookie(name) {
-                var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-                if (match) return match[2];
-                return null;
-            }
+            (function ($) {
+                function getCookie(name) {
+                    var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+                    if (match) return match[2];
+                    return null;
+                }
 
-            var cookieName = '<?php echo esc_js($consent_cookie_name); ?>';
-            var statusDiv = $('#woo-gads-cookie-status');
-            var value = getCookie(cookieName);
+                var cookieName = '<?php echo esc_js($consent_cookie_name); ?>';
+                var statusDiv = $('#woo-gads-cookie-status');
+                var value = getCookie(cookieName);
 
-            if (value) {
-                statusDiv.text('Pastille verte : "Cookie trouvé, valeur : ' + value + '"')
-                         .css({'background': '#e7f9ed', 'color': '#116633', 'border': '1px solid #c3ebce'});
-            } else {
-                statusDiv.text('Pastille rouge : "Cookie introuvable sur ce domaine. Vérifiez votre bannière Concord"')
-                         .css({'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf'});
-            }
-        })(jQuery);
+                if (value) {
+                    statusDiv.text('Pastille verte : "Cookie trouvé, valeur : ' + value + '"')
+                        .css({ 'background': '#e7f9ed', 'color': '#116633', 'border': '1px solid #c3ebce' });
+                } else {
+                    statusDiv.text('Pastille rouge : "Cookie introuvable sur ce domaine. Vérifiez votre bannière Concord"')
+                        .css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf' });
+                }
+            })(jQuery);
         </script>
 
         <h3>2. Audit des dernières commandes (Backend Check)</h3>
@@ -79,6 +81,7 @@ $logs = Woo_Gads_Db::get_logs(50);
                     <th>Statut de Consentement</th>
                     <th>Identifiants de clic capturés</th>
                     <th>Données client (Enhanced Conversions)</th>
+                    <th>Résultat API</th>
                 </tr>
             </thead>
             <tbody>
@@ -95,13 +98,45 @@ $logs = Woo_Gads_Db::get_logs(50);
                     foreach ($recent_orders as $order) {
                         $order_id = $order->get_id();
                         $consent = get_post_meta($order_id, '_woo_gads_consent', true);
-                        
+
                         // Click IDs
                         $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);
                         $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true);
                         $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true);
                         $ids = array_filter(array('GCLID' => $gclid, 'WBRAID' => $wbraid, 'GBRAID' => $gbraid));
-                        
+
+                        // API Status
+                        $api_status = get_post_meta($order_id, '_gads_api_status', true);
+                        if (empty($api_status)) {
+                            // Regarder si ancien tag sent existe pour la compatibilité
+                            $legacy_sent = get_post_meta($order_id, '_gads_api_sent', true);
+                            if ($legacy_sent === '1') {
+                                $api_status = 'Succès (Legacy)';
+                            } elseif (!empty($legacy_sent)) {
+                                $api_status = 'Erreur (Legacy)';
+                            } else {
+                                $api_status = 'En attente / Non traité';
+                            }
+                        }
+
+                        // Consent Display Logic
+                        $consent_display = '';
+                        if ($consent === 'no_cookie_found' || empty($consent)) {
+                            $consent_display = '<span style="color:#d63638; font-weight:bold;">DENIED (Aucun cookie)</span>';
+                        } else {
+                            $decoded = html_entity_decode(stripslashes($consent), ENT_QUOTES);
+                            $parsed = json_decode($decoded, true);
+                            if (is_array($parsed) && isset($parsed['marketing'])) {
+                                if ($parsed['marketing'] === true) {
+                                    $consent_display = '<span style="color:#00a32a; font-weight:bold;">GRANTED (Accepté)</span>';
+                                } else {
+                                    $consent_display = '<span style="color:#dba617; font-weight:bold;">DENIED (Refusé)</span>';
+                                }
+                            } else {
+                                $consent_display = '<span style="color:#d63638; font-weight:bold;">Erreur Format / DENIED</span>';
+                            }
+                        }
+
                         // Customer Data
                         $email = $order->get_billing_email();
                         $phone = $order->get_billing_phone();
@@ -113,16 +148,10 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 <small><?php echo esc_html($order->get_date_created()->date('d/m/Y H:i')); ?></small>
                             </td>
                             <td>
-                                <?php 
-                                if ($consent === 'no_cookie_found' || empty($consent)) {
-                                    echo '<span style="color:#d63638;">Non / Non trouvé</span>';
-                                } else {
-                                    echo '<span style="color:#00a32a;">Oui (' . esc_html($consent) . ')</span>';
-                                }
-                                ?>
+                                <?php echo $consent_display; ?>
                             </td>
                             <td>
-                                <?php 
+                                <?php
                                 if (empty($ids)) {
                                     echo '<span style="color:#646970;">Aucun identifiant</span>';
                                 } else {
@@ -133,13 +162,16 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 ?>
                             </td>
                             <td>
-                                <?php 
+                                <?php
                                 if ($has_data) {
                                     echo '<span style="color:#00a32a;">Prêtes pour le hachage</span>';
                                 } else {
                                     echo '<span style="color:#d63638;">Manquantes (' . (empty($email) ? 'Email ' : '') . (empty($phone) ? 'Tel' : '') . ')</span>';
                                 }
                                 ?>
+                            </td>
+                            <td>
+                                <strong><?php echo esc_html($api_status); ?></strong>
                             </td>
                         </tr>
                         <?php

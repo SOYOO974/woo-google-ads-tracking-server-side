@@ -21,7 +21,16 @@ class Woo_Gads_Api
             return;
         }
 
-        // Consent Moder v2 check
+        $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);
+        $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true);
+        $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true);
+
+        if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
+            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            return;
+        }
+
+        // Consent Mode v2 check
         $consent_cookie = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
         $marketing_consent = false;
 
@@ -52,6 +61,7 @@ class Woo_Gads_Api
         $conversion_action_id = isset($settings['conversion_action_id']) ? $settings['conversion_action_id'] : '';
 
         if (empty($developer_token) || empty($merchant_id) || empty($conversion_action_id)) {
+            update_post_meta($order_id, '_gads_api_status', 'Erreur de configuration');
             return;
         }
 
@@ -61,6 +71,7 @@ class Woo_Gads_Api
 
         if (!$access_token) {
             Woo_Gads_Db::insert_log($order_id, 0, 'N/A', 'N/A', 'OAuth Access Token missing');
+            update_post_meta($order_id, '_gads_api_status', 'Erreur OAuth');
             return;
         }
 
@@ -69,6 +80,7 @@ class Woo_Gads_Api
 
         if (!$payload) {
             // Missing essential click IDs
+            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
             return;
         }
 
@@ -94,14 +106,17 @@ class Woo_Gads_Api
             $error_message = $response->get_error_message();
             Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . ' | Erreur HTTP: ' . $error_message);
             update_post_meta($order_id, '_gads_api_sent', 'Failed: ' . $error_message);
+            update_post_meta($order_id, '_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
         } else {
             // Success or logical failure
             $error_col = ($http_status != 200) ? 'Erreur API' : '';
             Woo_Gads_Db::insert_log($order_id, $http_status, $payload, json_decode($body, true), $consent_log_msg . ($error_col ? ' | ' . $error_col : ''));
             if ($http_status == 200) {
                 update_post_meta($order_id, '_gads_api_sent', '1');
+                update_post_meta($order_id, '_gads_api_status', 'Succès');
             } else {
                 update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);
+                update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ')');
             }
         }
     }

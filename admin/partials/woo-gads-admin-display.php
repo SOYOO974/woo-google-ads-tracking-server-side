@@ -11,6 +11,8 @@ $active_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'setting
             class="nav-tab <?php echo $active_tab == 'tutorial' ? 'nav-tab-active' : ''; ?>">Tutoriel</a>
         <a href="?page=woo-gads-server-side&tab=logs"
             class="nav-tab <?php echo $active_tab == 'logs' ? 'nav-tab-active' : ''; ?>">Diagnostic & Logs</a>
+        <a href="?page=woo-gads-server-side&tab=support"
+            class="nav-tab <?php echo $active_tab == 'support' ? 'nav-tab-active' : ''; ?>">Support</a>
     </h2>
 
     <?php if (isset($_GET['oauth_success'])): ?>
@@ -32,6 +34,8 @@ $active_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'setting
             require_once dirname(__FILE__) . '/woo-gads-admin-tutorial.php';
         } elseif ($active_tab == 'logs') {
             require_once dirname(__FILE__) . '/woo-gads-admin-logs.php';
+        } elseif ($active_tab == 'support') {
+            require_once dirname(__FILE__) . '/woo-gads-admin-support.php';
         }
         ?>
     </div>

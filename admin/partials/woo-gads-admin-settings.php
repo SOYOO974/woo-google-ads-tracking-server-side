@@ -25,6 +25,15 @@ $settings = get_option('woo_gads_settings');
             </td>
         </tr>
         <tr>
+            <th scope="row">Manager Customer ID (MCC ID) [Optionnel]</th>
+            <td>
+                <input type="text" name="woo_gads_settings[manager_id]"
+                    value="<?php echo esc_attr($settings['manager_id'] ?? ''); ?>" class="regular-text"
+                    placeholder="ex: 9876543210 (sans tirets)" />
+                <p class="description">Requis uniquement si l'email de connexion OAuth utilise un compte Administrateur (MCC) pour accéder au compte client Google Ads ci-dessus.</p>
+            </td>
+        </tr>
+        <tr>
             <th scope="row">Conversion Action ID</th>
             <td>
                 <input type="text" name="woo_gads_settings[conversion_action_id]"

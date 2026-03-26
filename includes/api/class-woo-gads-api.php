@@ -59,6 +59,7 @@ class Woo_Gads_Api
         $developer_token = isset($settings['developer_token']) ? $settings['developer_token'] : '';
         $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', $settings['merchant_id']) : '';
         $conversion_action_id = isset($settings['conversion_action_id']) ? $settings['conversion_action_id'] : '';
+        $manager_id = isset($settings['manager_id']) ? preg_replace('/[^0-9]/', '', $settings['manager_id']) : '';
 
         if (empty($developer_token) || empty($merchant_id) || empty($conversion_action_id)) {
             update_post_meta($order_id, '_gads_api_status', 'Erreur de configuration');
@@ -86,14 +87,20 @@ class Woo_Gads_Api
         }
 
         // Send to API
-        $url = "https://googleads.googleapis.com/v17/customers/{$merchant_id}:uploadClickConversions";
+        $url = "https://googleads.googleapis.com/v23/customers/{$merchant_id}:uploadClickConversions";
+
+        $headers = array(
+            'Authorization' => 'Bearer ' . $access_token,
+            'developer-token' => $developer_token,
+            'Content-Type' => 'application/json',
+        );
+
+        if (!empty($manager_id)) {
+            $headers['login-customer-id'] = $manager_id;
+        }
 
         $args = array(
-            'headers' => array(
-                'Authorization' => 'Bearer ' . $access_token,
-                'developer-token' => $developer_token,
-                'Content-Type' => 'application/json',
-            ),
+            'headers' => $headers,
             'body' => wp_json_encode($payload),
             'method' => 'POST',
             'timeout' => 30,
@@ -123,10 +130,30 @@ class Woo_Gads_Api
                 $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
                 if (!empty($body)) {
                     $body_decoded = json_decode($body, true);
-                    if (isset($body_decoded['error']['message'])) {
-                        $error_details .= ' Détails : ' . $body_decoded['error']['message'];
+                    if ($body_decoded && isset($body_decoded['error'])) {
+                        if (isset($body_decoded['error']['message'])) {
+                            $error_details .= ' Message : ' . $body_decoded['error']['message'];
+                        }
+                        if (isset($body_decoded['error']['details']) && is_array($body_decoded['error']['details'])) {
+                            foreach ($body_decoded['error']['details'] as $detail) {
+                                if (isset($detail['errors']) && is_array($detail['errors'])) {
+                                    foreach ($detail['errors'] as $err) {
+                                        if (isset($err['message'])) {
+                                            $error_details .= ' | Détail : ' . $err['message'];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback pour les erreurs non-JSON (ex: page HTML 404 de Google)
+                        $error_details .= ' Détails bruts : ' . trim(substr(strip_tags($body), 0, 500));
                     }
                 }
+                
+                // Mettre à jour avec plus de contexte pour être visible dans le backoffice si on le souhaite
+                update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
+                
                 $this->send_error_email($order_id, $error_details);
             }
         }

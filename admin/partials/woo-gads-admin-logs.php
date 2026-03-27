@@ -78,6 +78,7 @@ $logs = Woo_Gads_Db::get_logs(50);
             <thead>
                 <tr>
                     <th style="width: 150px;">Order ID & Date</th>
+                    <th>Statut Commande</th>
                     <th>Statut de Consentement</th>
                     <th>Identifiants de clic capturés</th>
                     <th>Données client (Enhanced Conversions)</th>
@@ -93,7 +94,7 @@ $logs = Woo_Gads_Db::get_logs(50);
                 ));
 
                 if (empty($recent_orders)) {
-                    echo '<tr><td colspan="4">Aucune commande trouvée.</td></tr>';
+                    echo '<tr><td colspan="6">Aucune commande trouvée.</td></tr>';
                 } else {
                     foreach ($recent_orders as $order) {
                         $order_id = $order->get_id();
@@ -146,6 +147,12 @@ $logs = Woo_Gads_Db::get_logs(50);
                             <td>
                                 <strong>#<?php echo esc_html($order_id); ?></strong><br>
                                 <small><?php echo esc_html($order->get_date_created()->date('d/m/Y H:i')); ?></small>
+                            </td>
+                            <td>
+                                <?php 
+                                $status_class = 'order-status status-' . esc_attr($order->get_status());
+                                echo '<mark class="' . $status_class . '" style="background:transparent;"><span>' . esc_html(wc_get_order_status_name($order->get_status())) . '</span></mark>'; 
+                                ?>
                             </td>
                             <td>
                                 <?php echo $consent_display; ?>

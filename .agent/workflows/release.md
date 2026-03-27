@@ -25,6 +25,6 @@ Ce workflow met à jour les numéros de version, crée un commit, pousse vers Gi
 // turbo
 8. Pousser le tag vers GitHub (`git push origin v[VERSION]`)
 
-9. Vérifier si l'outil GitHub CLI (`gh`) est installé en lançant `gh --version`.
-    - Si installé, exécuter : `gh release create v[VERSION] --title "v[VERSION]" --notes "[CHANGELOG]"`
-    - Si l'outil n'est pas installé ou n'est pas authentifié, indiquer explicitement à l'utilisateur de se rendre sur la page GitHub de son dépôt dans l'onglet "Releases" pour y créer une nouvelle Release basée sur le tag `v[VERSION]` qui vient d'être poussé.
+9. Vérifier si l'outil GitHub CLI (`gh`) est installé en lançant `gh --version`. Si `gh` n'est pas reconnu, vérifier avec le chemin complet `& "C:\Program Files\GitHub CLI\gh.exe" --version`.
+    - Si trouvé, exécuter la création de la release : `gh release create v[VERSION] --title "v[VERSION]" --notes "[CHANGELOG]"` (en adaptant la commande avec le chemin complet si nécessaire).
+    - Si l'outil n'est toujours pas disponible, indiquer à l'utilisateur de créer la Release manuellement sur GitHub.

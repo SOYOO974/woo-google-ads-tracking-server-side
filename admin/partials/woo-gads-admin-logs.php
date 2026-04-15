@@ -203,12 +203,13 @@ $logs = Woo_Gads_Db::get_logs(50);
                 <th>Erreur</th>
                 <th>Payload</th>
                 <th>Réponse API</th>
+                <th style="width: 100px;">Action</th>
             </tr>
         </thead>
         <tbody>
             <?php if (empty($logs)): ?>
                 <tr>
-                    <td colspan="7">Aucune requête enregistrée pour le moment.</td>
+                    <td colspan="8">Aucune requête enregistrée pour le moment.</td>
                 </tr>
             <?php else: ?>
                 <?php foreach ($logs as $log): ?>
@@ -241,6 +242,9 @@ $logs = Woo_Gads_Db::get_logs(50);
                         <td>
                             <textarea readonly rows="2"
                                 style="width:100%; font-size:10px;"><?php echo esc_textarea(is_string($log->response) ? $log->response : json_encode($log->response)); ?></textarea>
+                        </td>
+                        <td>
+                            <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($log->order_id); ?>">Renvoyer</button>
                         </td>
                     </tr>
                 <?php endforeach; ?>

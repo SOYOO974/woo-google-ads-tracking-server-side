@@ -65,7 +65,14 @@ class Woo_Gads_Api
             }
         }
 
-        $consent_log_msg = $marketing_consent ? 'Envoi avec données clients (GRANTED)' : 'Envoi anonymisé (DENIED - Cookie absent/refusé)';
+        $consent_log_msg = '';
+        if ($marketing_consent) {
+            $consent_log_msg = 'Envoi avec données clients (GRANTED)';
+        } elseif ($cookie_value) {
+            $consent_log_msg = 'Envoi anonymisé (DENIED - Refusé par l\'utilisateur)';
+        } else {
+            $consent_log_msg = 'Envoi anonymisé (DENIED - Cookie absent)';
+        }
 
         // Extract settings
         $developer_token = isset($settings['developer_token']) ? $settings['developer_token'] : '';
@@ -169,6 +176,9 @@ class Woo_Gads_Api
                 $this->send_error_email($order_id, $error_details);
             }
         }
+
+        // Check if cookies have been missing consecutively in recent logs
+        $this->check_consecutive_missing_cookies();
     }
 
     private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent)
@@ -282,6 +292,62 @@ class Woo_Gads_Api
 
         // Prevent multiple emails for the same order if repeatedly retried rapidly (optional, but good practice).
         // For now, simple email sending.
+        wp_mail($to, $subject, $message, $headers);
+    }
+
+    private function check_consecutive_missing_cookies()
+    {
+        // Avoid sending multiple alerts within 24 hours
+        if (get_transient('woo_gads_cookie_alert_sent')) {
+            return;
+        }
+
+        // Retrieve last 12 logs
+        $logs = Woo_Gads_Db::get_logs(12);
+
+        // We need at least 12 logs to alert
+        if (count($logs) < 12) {
+            return;
+        }
+
+        $missing_count = 0;
+        foreach ($logs as $log) {
+            if (strpos($log->error, 'Cookie absent') !== false) {
+                $missing_count++;
+            }
+        }
+
+        // If all of the last 12 logs show "Cookie absent"
+        if ($missing_count === 12) {
+            $this->send_cookie_alert_email();
+            set_transient('woo_gads_cookie_alert_sent', '1', DAY_IN_SECONDS);
+        }
+    }
+
+    private function send_cookie_alert_email()
+    {
+        $settings = get_option('woo_gads_settings');
+        
+        if (empty($settings['enable_email_alerts']) || $settings['enable_email_alerts'] !== '1') {
+            return;
+        }
+
+        $to = !empty($settings['alert_email']) ? sanitize_email($settings['alert_email']) : get_option('admin_email');
+        if (!is_email($to)) {
+            return;
+        }
+
+        $subject = 'Alerte : Dysfonctionnement du cookie de consentement (Concord)';
+        
+        $message = "Bonjour,\n\n";
+        $message .= "Le plugin Google Ads Server-Side a détecté que les 12 derniers envois de conversion ont été faits sans le cookie de consentement (Cookie absent).\n\n";
+        $message .= "Cela signifie très probablement que le script de votre bannière de consentement (Concord) est manquant, inactif, ou que le nom du cookie configuré dans les réglages du plugin est incorrect.\n\n";
+        $message .= "Actuellement, toutes les conversions associées à vos campagnes publicitaires sont envoyées anonymisées à Google Ads (DENIED), ce qui dégrade l'optimisation de vos enchères.\n\n";
+        $message .= "Veuillez vous rendre sur l'onglet 'Diagnostic & Logs' du plugin dans l'administration de votre site pour exécuter le test en direct et identifier la cause.\n\n";
+        $message .= "Cordialement,\nLe Plugin Woo Google Ads Server-Side";
+
+        $headers = array('Content-Type: text/plain; charset=UTF-8');
+
         wp_mail($to, $subject, $message, $headers);
     }
 }

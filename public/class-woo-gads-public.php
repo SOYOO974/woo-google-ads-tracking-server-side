@@ -50,8 +50,24 @@ class Woo_Gads_Public
         // Save consent status
         $settings = get_option('woo_gads_settings');
         $consent_cookie = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
+        
+        $cookie_value = null;
         if (isset($_COOKIE[$consent_cookie])) {
-            update_post_meta($order_id, '_woo_gads_consent', sanitize_text_field($_COOKIE[$consent_cookie]));
+            $cookie_value = $_COOKIE[$consent_cookie];
+        } else {
+            // Fallback for prefix match if it's a concord-allow-state cookie
+            if (strpos($consent_cookie, 'concord-allow-state-') === 0) {
+                foreach ($_COOKIE as $key => $val) {
+                    if (strpos($key, 'concord-allow-state-') === 0) {
+                        $cookie_value = $val;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ($cookie_value !== null) {
+            update_post_meta($order_id, '_woo_gads_consent', sanitize_text_field($cookie_value));
         } else {
             update_post_meta($order_id, '_woo_gads_consent', 'no_cookie_found');
         }

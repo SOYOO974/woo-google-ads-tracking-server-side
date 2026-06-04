@@ -40,6 +40,18 @@ class Woo_Gads_Api
         if (isset($_COOKIE[$consent_cookie]) && !empty($_COOKIE[$consent_cookie])) {
             $cookie_value = stripslashes($_COOKIE[$consent_cookie]);
         } else {
+            // Fallback for prefix match if it's a concord-allow-state cookie
+            if (strpos($consent_cookie, 'concord-allow-state-') === 0) {
+                foreach ($_COOKIE as $key => $val) {
+                    if (strpos($key, 'concord-allow-state-') === 0) {
+                        $cookie_value = stripslashes($val);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$cookie_value) {
             $meta_cookie = get_post_meta($order_id, '_woo_gads_consent', true);
             if ($meta_cookie && $meta_cookie !== 'no_cookie_found') {
                 $cookie_value = html_entity_decode($meta_cookie, ENT_QUOTES); // Decode if sanitized as text field

@@ -56,20 +56,63 @@ $logs = Woo_Gads_Db::get_logs(50);
                 function getCookie(name) {
                     var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
                     if (match) return match[2];
+                    
+                    // Fallback for prefix matching
+                    if (name.indexOf('concord-allow-state-') === 0) {
+                        var cookies = document.cookie.split('; ');
+                        for (var i = 0; i < cookies.length; i++) {
+                            var parts = cookies[i].split('=');
+                            if (parts[0].indexOf('concord-allow-state-') === 0) {
+                                return parts[1];
+                            }
+                        }
+                    }
                     return null;
                 }
 
                 var cookieName = '<?php echo esc_js($consent_cookie_name); ?>';
                 var statusDiv = $('#woo-gads-cookie-status');
                 var value = getCookie(cookieName);
+                var homeUrl = '<?php echo esc_url(home_url('/')); ?>';
 
-                if (value) {
-                    statusDiv.text('Pastille verte : "Cookie trouvé, valeur : ' + value + '"')
-                        .css({ 'background': '#e7f9ed', 'color': '#116633', 'border': '1px solid #c3ebce' });
-                } else {
-                    statusDiv.text('Pastille rouge : "Cookie introuvable sur ce domaine. Vérifiez votre bannière Concord"')
-                        .css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf' });
-                }
+                statusDiv.text('Vérification du cookie et du script en cours...')
+                    .css({ 'background': '#f6f7f7', 'color': '#50575e', 'border': '1px solid #dcdcde' });
+
+                fetch(homeUrl)
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('Network response was not ok');
+                        return response.text();
+                    })
+                    .then(function(html) {
+                        var hasConcordScript = html.toLowerCase().indexOf('concord') !== -1;
+                        
+                        if (value) {
+                            if (hasConcordScript) {
+                                statusDiv.html('<strong>Pastille verte :</strong> Cookie trouvé dans votre navigateur et script Concord détecté sur votre site.<br><small>Valeur : ' + decodeURIComponent(value) + '</small>')
+                                    .css({ 'background': '#e7f9ed', 'color': '#116633', 'border': '1px solid #c3ebce', 'display': 'inline-block' });
+                            } else {
+                                statusDiv.html('<strong>Pastille orange :</strong> Cookie trouvé dans votre navigateur, mais le script Concord semble <strong>absent ou inactif</strong> sur votre page d\'accueil.<br><small>Veuillez vérifier que le script de la bannière Concord est bien installé sur votre thème ou via GTM. Valeur du cookie : ' + decodeURIComponent(value) + '</small>')
+                                    .css({ 'background': '#fff8e5', 'color': '#b25e00', 'border': '1px solid #ffebc2', 'display': 'inline-block', 'max-width': '100%' });
+                            }
+                        } else {
+                            if (hasConcordScript) {
+                                statusDiv.html('<strong>Pastille jaune :</strong> Script Concord détecté sur votre page d\'accueil, mais aucun consentement n\'a été enregistré dans votre navigateur (Cookie introuvable).')
+                                    .css({ 'background': '#fff8e5', 'color': '#b25e00', 'border': '1px solid #ffebc2', 'display': 'inline-block', 'max-width': '100%' });
+                            } else {
+                                statusDiv.html('<strong>Pastille rouge :</strong> Cookie introuvable et script Concord absent sur votre page d\'accueil. Vérifiez l\'installation de votre bannière.')
+                                    .css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf', 'display': 'inline-block', 'max-width': '100%' });
+                            }
+                        }
+                    })
+                    .catch(function(err) {
+                        if (value) {
+                            statusDiv.html('<strong>Pastille verte (locale) :</strong> Cookie trouvé, valeur : ' + decodeURIComponent(value) + '. <br><small>Impossible de vérifier la page d\'accueil en arrière-plan (' + err.message + ').</small>')
+                                .css({ 'background': '#e7f9ed', 'color': '#116633', 'border': '1px solid #c3ebce', 'display': 'inline-block' });
+                        } else {
+                            statusDiv.html('<strong>Pastille rouge :</strong> Cookie introuvable sur ce domaine. Vérifiez votre installation.')
+                                .css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf', 'display': 'inline-block' });
+                        }
+                    });
             })(jQuery);
         </script>
 

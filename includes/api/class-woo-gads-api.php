@@ -302,11 +302,11 @@ class Woo_Gads_Api
             return;
         }
 
-        // Retrieve last 12 logs
-        $logs = Woo_Gads_Db::get_logs(12);
+        // Retrieve last 6 logs
+        $logs = Woo_Gads_Db::get_logs(6);
 
-        // We need at least 12 logs to alert
-        if (count($logs) < 12) {
+        // We need at least 6 logs to alert
+        if (count($logs) < 6) {
             return;
         }
 
@@ -317,8 +317,8 @@ class Woo_Gads_Api
             }
         }
 
-        // If all of the last 12 logs show "Cookie absent"
-        if ($missing_count === 12) {
+        // If all of the last 6 logs show "Cookie absent"
+        if ($missing_count === 6) {
             $this->send_cookie_alert_email();
             set_transient('woo_gads_cookie_alert_sent', '1', DAY_IN_SECONDS);
         }
@@ -340,7 +340,7 @@ class Woo_Gads_Api
         $subject = 'Alerte : Dysfonctionnement du cookie de consentement (Concord)';
         
         $message = "Bonjour,\n\n";
-        $message .= "Le plugin Google Ads Server-Side a détecté que les 12 derniers envois de conversion ont été faits sans le cookie de consentement (Cookie absent).\n\n";
+        $message .= "Le plugin Google Ads Server-Side a détecté que les 6 derniers envois de conversion ont été faits sans le cookie de consentement (Cookie absent).\n\n";
         $message .= "Cela signifie très probablement que le script de votre bannière de consentement (Concord) est manquant, inactif, ou que le nom du cookie configuré dans les réglages du plugin est incorrect.\n\n";
         $message .= "Actuellement, toutes les conversions associées à vos campagnes publicitaires sont envoyées anonymisées à Google Ads (DENIED), ce qui dégrade l'optimisation de vos enchères.\n\n";
         $message .= "Veuillez vous rendre sur l'onglet 'Diagnostic & Logs' du plugin dans l'administration de votre site pour exécuter le test en direct et identifier la cause.\n\n";

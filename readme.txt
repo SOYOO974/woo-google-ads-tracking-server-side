@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.2.3
+Stable tag: 1.2.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,10 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.2.4 =
+* Amélioration : Distinction dans la colonne "Erreur" des logs entre un cookie absent et un refus de consentement explicite.
+* Sécurité/Alerte : Envoi automatique d'une alerte email à l'administrateur si 6 envois consécutifs de conversion se font sans cookie de consentement (panne potentielle de la CMP).
 
 = 1.2.3 =
 * Amélioration : Implémentation du repli par préfixe pour le cookie Concord (`concord-allow-state-`) pour fiabiliser le tracking lors des redéploiements de bannières.

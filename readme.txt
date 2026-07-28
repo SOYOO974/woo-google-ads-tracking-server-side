@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.2.4
+Stable tag: 1.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.3.0 =
+* Feature : Support des Enhanced Conversions for Leads (ECL) — les conversions sont désormais envoyées même sans identifiant de clic (GCLID/WBRAID/GBRAID), dès lors que des données utilisateur hachées (email, téléphone) sont disponibles et que le consentement marketing est accordé.
+* Amélioration : Ajout du champ `userIdentifierSource: FIRST_PARTY` sur chaque UserIdentifier, requis par l'API Google Ads pour les ECL.
+* Amélioration : Statut de succès distinct dans les logs et métadonnées de commande (`Succès (Enhanced Conversions for Leads)`) pour différencier les conversions envoyées sans click ID.
 
 = 1.2.4 =
 * Amélioration : Distinction dans la colonne "Erreur" des logs entre un cookie absent et un refus de consentement explicite.

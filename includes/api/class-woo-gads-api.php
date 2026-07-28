@@ -24,11 +24,7 @@ class Woo_Gads_Api
         $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);
         $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true);
         $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true);
-
-        if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
-            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
-            return;
-        }
+        $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
 
         // Consent Mode v2 check
         $consent_cookie = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
@@ -100,8 +96,8 @@ class Woo_Gads_Api
         $payload = $this->build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent);
 
         if (!$payload) {
-            // Missing essential click IDs
-            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            // No click ID and no user identifiers available
+            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant ni données utilisateur)');
             return;
         }
 
@@ -141,7 +137,8 @@ class Woo_Gads_Api
             Woo_Gads_Db::insert_log($order_id, $http_status, $payload, json_decode($body, true), $consent_log_msg . ($error_col ? ' | ' . $error_col : ''));
             if ($http_status == 200) {
                 update_post_meta($order_id, '_gads_api_sent', '1');
-                update_post_meta($order_id, '_gads_api_status', 'Succès');
+                $success_status = $has_click_id ? 'Succès' : 'Succès (Enhanced Conversions for Leads)';
+                update_post_meta($order_id, '_gads_api_status', $success_status);
             } else {
                 update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);
                 update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ')');
@@ -188,9 +185,7 @@ class Woo_Gads_Api
         $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true);
         $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true);
 
-        if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
-            return false;
-        }
+        $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
 
         $conversion = array(
             'conversionAction' => "customers/{$merchant_id}/conversionActions/{$conversion_action_id}",
@@ -223,6 +218,7 @@ class Woo_Gads_Api
             $email = $order->get_billing_email();
             if (!empty($email)) {
                 $user_identifier[] = array(
+                    'userIdentifierSource' => 'FIRST_PARTY',
                     'hashedEmail' => hash('sha256', strtolower(trim($email)))
                 );
             }
@@ -231,6 +227,7 @@ class Woo_Gads_Api
             if (!empty($phone)) {
                 $clean_phone = ltrim(trim($phone), '+');
                 $user_identifier[] = array(
+                    'userIdentifierSource' => 'FIRST_PARTY',
                     'hashedPhoneNumber' => hash('sha256', $clean_phone)
                 );
             }
@@ -251,6 +248,7 @@ class Woo_Gads_Api
                     $address['countryCode'] = $country;
                     $address['postalCode'] = $zip;
                     $user_identifier[] = array(
+                        'userIdentifierSource' => 'FIRST_PARTY',
                         'addressInfo' => $address
                     );
                 }
@@ -259,6 +257,11 @@ class Woo_Gads_Api
             if (!empty($user_identifier)) {
                 $conversion['userIdentifiers'] = $user_identifier;
             }
+        }
+
+        // If no click ID AND no user identifiers, nothing useful to send
+        if (!$has_click_id && empty($conversion['userIdentifiers'])) {
+            return false;
         }
 
         return array(

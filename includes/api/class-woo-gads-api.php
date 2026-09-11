@@ -3,22 +3,38 @@
 class Woo_Gads_Api
 {
 
-    public function trigger_conversion($order_id)
+    public function trigger_conversion($order_id, $force = false)
     {
         // Prevent duplicate sending
         $already_sent = get_post_meta($order_id, '_gads_api_sent', true);
-        if ($already_sent === '1') {
+        if ($already_sent === '1' && !$force) {
+            return;
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order) {
             return;
         }
 
         $settings = get_option('woo_gads_settings');
 
-        // Only process on the specified status to avoid double processing if order is completed from processing
-        $target_status = isset($settings['order_status']) ? $settings['order_status'] : 'processing';
-        $order = wc_get_order($order_id);
+        if (!$force) {
+            $target_status = isset($settings['order_status']) ? $settings['order_status'] : 'processing';
+            $current_status = $order->get_status();
 
-        if (!$order || $order->get_status() !== $target_status) {
-            return;
+            $status_matches = false;
+            if ($target_status === 'processing_or_completed') {
+                $status_matches = in_array($current_status, array('processing', 'completed'), true);
+            } elseif ($current_status === $target_status) {
+                $status_matches = true;
+            } elseif ($target_status === 'processing' && $current_status === 'completed') {
+                // Safety net: order skipped 'processing' and went straight to 'completed'
+                $status_matches = true;
+            }
+
+            if (!$status_matches) {
+                return;
+            }
         }
 
         $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);

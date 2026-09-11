@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.3.1
+Stable tag: 1.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,12 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.3.2 =
+* Amélioration / Filet de sécurité anti-perte : Gestion des commandes qui sautent directement au statut "Terminée" (completed) sans passer par "En cours" (processing), notamment via les modules de paiement (ex: WebToffee Stripe) ou des snippets d'auto-complétion.
+* Correctif : Déblocage du bouton de renvoi manuel "Renvoyer" dans l'administration, désormais insensible au statut actuel de la commande ($force = true).
+* Nouvelle option : Ajout de l'option recommandée "En cours ou Terminée (Recommandé - Anti-perte)" dans le réglage du statut déclencheur.
+* Diagnostic : Message explicite dans l'audit des commandes lorsqu'une commande est en attente en raison d'un décalage entre son statut et le statut déclencheur configuré.
 
 = 1.3.1 =
 * Correctif critique : Rollback de l'envoi des conversions sans identifiant de clic (ECL). L'envoi sans GCLID/WBRAID/GBRAID provoquait une sur-attribution massive dans Google Ads (toutes les ventes du site étaient comptabilisées comme conversions Google Ads, même celles venant d'autres sources de trafic).

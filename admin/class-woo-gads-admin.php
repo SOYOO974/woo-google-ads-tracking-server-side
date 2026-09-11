@@ -97,7 +97,7 @@ class Woo_Gads_Admin
         delete_post_meta($order_id, '_gads_api_sent');
         
         $api = new Woo_Gads_Api();
-        $api->trigger_conversion($order_id);
+        $api->trigger_conversion($order_id, true);
 
         $new_status = get_post_meta($order_id, '_gads_api_status', true);
         

@@ -3,7 +3,7 @@
  * Plugin Name:       Woo Google Ads Server-Side Tracking
  * Plugin URI:        https://example.com
  * Description:       Envoi des conversions WooCommerce à l'API Google Ads en server-side, respectant le consentement.
- * Version:           1.3.1
+ * Version:           1.3.2
  * Author:            SOYOO
  * Text Domain:       woo-gads-server-side
  * Domain Path:       /languages
@@ -14,7 +14,7 @@ if (!defined('WPINC')) {
 	die;
 }
 
-define('WOO_GADS_VERSION', '1.3.1');
+define('WOO_GADS_VERSION', '1.3.2');
 define('WOO_GADS_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WOO_GADS_PLUGIN_URL', plugin_dir_url(__FILE__));
 

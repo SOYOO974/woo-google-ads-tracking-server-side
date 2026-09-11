@@ -159,7 +159,19 @@ $logs = Woo_Gads_Db::get_logs(50);
                             } elseif (!empty($legacy_sent)) {
                                 $api_status = 'Erreur (Legacy)';
                             } else {
-                                $api_status = 'En attente / Non traité';
+                                $current_order_status = $order->get_status();
+                                $configured_trigger = isset($settings['order_status']) ? $settings['order_status'] : 'processing';
+                                if ($configured_trigger === 'processing_or_completed') {
+                                    if (!in_array($current_order_status, array('processing', 'completed'), true)) {
+                                        $api_status = '<span style="color:#dba617;">En attente (Statut "' . esc_html($current_order_status) . '" ≠ En cours/Terminée)</span>';
+                                    } else {
+                                        $api_status = 'En attente / Non traité';
+                                    }
+                                } elseif ($current_order_status !== $configured_trigger) {
+                                    $api_status = '<span style="color:#dba617;">En attente (Statut "' . esc_html($current_order_status) . '" ≠ Déclencheur "' . esc_html($configured_trigger) . '")</span>';
+                                } else {
+                                    $api_status = 'En attente / Non traité';
+                                }
                             }
                         }
 

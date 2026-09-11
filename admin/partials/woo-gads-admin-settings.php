@@ -188,12 +188,12 @@ $settings = get_option('woo_gads_settings');
             <th scope="row">Statut de commande déclencheur</th>
             <td>
                 <select name="woo_gads_settings[order_status]">
-                    <option value="on-hold" <?php selected($settings['order_status'] ?? 'processing', 'on-hold'); ?>>En attente (On hold)</option>
+                    <option value="processing_or_completed" <?php selected($settings['order_status'] ?? 'processing', 'processing_or_completed'); ?>>En cours ou Terminée (Recommandé - Anti-perte)</option>
                     <option value="processing" <?php selected($settings['order_status'] ?? 'processing', 'processing'); ?>>En cours (Processing)</option>
                     <option value="completed" <?php selected($settings['order_status'] ?? 'processing', 'completed'); ?>>Terminée (Completed)</option>
+                    <option value="on-hold" <?php selected($settings['order_status'] ?? 'processing', 'on-hold'); ?>>En attente (On hold)</option>
                 </select>
-                <p class="description">Le statut de la commande WooCommerce à partir duquel l'API Google Ads sera
-                    contactée.</p>
+                <p class="description">Le statut de la commande WooCommerce à partir duquel l'API Google Ads sera contactée (l'option recommandée garantit la transmission même si le paiement saute l'étape « En cours »).</p>
             </td>
         </tr>
         <tr>

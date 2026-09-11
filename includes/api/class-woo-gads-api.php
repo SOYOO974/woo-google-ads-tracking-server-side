@@ -157,6 +157,18 @@ class Woo_Gads_Api
         $http_status = wp_remote_retrieve_response_code($response);
         $body = wp_remote_retrieve_body($response);
 
+        // Auto-recovery on 401 Unauthorized (expired or desynchronized cached transient)
+        if (!is_wp_error($response) && $http_status == 401) {
+            delete_transient('woo_gads_access_token');
+            $new_access_token = $oauth->get_access_token(true);
+            if ($new_access_token) {
+                $args['headers']['Authorization'] = 'Bearer ' . $new_access_token;
+                $response = wp_remote_post($url, $args);
+                $http_status = wp_remote_retrieve_response_code($response);
+                $body = wp_remote_retrieve_body($response);
+            }
+        }
+
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
             Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . ' | Erreur HTTP: ' . $error_message);

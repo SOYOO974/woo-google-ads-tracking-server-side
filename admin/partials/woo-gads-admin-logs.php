@@ -162,7 +162,8 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 $current_order_status = $order->get_status();
                                 $target_statuses = Woo_Gads_Api::get_target_statuses($settings ?? array());
                                 if (!in_array($current_order_status, $target_statuses, true)) {
-                                    $api_status = '<span style="color:#dba617;">En attente (Statut "' . esc_html($current_order_status) . '" non coché)</span>';
+                                    $status_name = wc_get_order_status_name($current_order_status);
+                                    $api_status = 'En attente (Statut « ' . $status_name . ' » non coché)';
                                 } else {
                                     $api_status = 'En attente / Non traité';
                                 }
@@ -227,7 +228,19 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 ?>
                             </td>
                             <td>
-                                <strong><?php echo esc_html($api_status); ?></strong>
+                                <?php
+                                $status_color = '#1d2327';
+                                if (strpos($api_status, 'Succès') !== false) {
+                                    $status_color = '#00a32a';
+                                } elseif (strpos($api_status, 'Ignoré') !== false) {
+                                    $status_color = '#646970';
+                                } elseif (strpos($api_status, 'En attente') !== false) {
+                                    $status_color = '#dba617';
+                                } elseif (strpos($api_status, 'Échec') !== false || strpos($api_status, 'Erreur') !== false) {
+                                    $status_color = '#d63638';
+                                }
+                                ?>
+                                <strong style="color: <?php echo esc_attr($status_color); ?>;"><?php echo esc_html($api_status); ?></strong>
                                 <div style="margin-top: 5px;">
                                     <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($order_id); ?>">Renvoyer</button>
                                 </div>

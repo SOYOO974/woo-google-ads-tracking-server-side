@@ -185,15 +185,26 @@ $settings = get_option('woo_gads_settings');
             </td>
         </tr>
         <tr>
-            <th scope="row">Statut de commande déclencheur</th>
+            <th scope="row">Statuts de commande déclencheurs</th>
             <td>
-                <select name="woo_gads_settings[order_status]">
-                    <option value="processing_or_completed" <?php selected($settings['order_status'] ?? 'processing', 'processing_or_completed'); ?>>En cours ou Terminée (Recommandé - Anti-perte)</option>
-                    <option value="processing" <?php selected($settings['order_status'] ?? 'processing', 'processing'); ?>>En cours (Processing)</option>
-                    <option value="completed" <?php selected($settings['order_status'] ?? 'processing', 'completed'); ?>>Terminée (Completed)</option>
-                    <option value="on-hold" <?php selected($settings['order_status'] ?? 'processing', 'on-hold'); ?>>En attente (On hold)</option>
-                </select>
-                <p class="description">Le statut de la commande WooCommerce à partir duquel l'API Google Ads sera contactée (l'option recommandée garantit la transmission même si le paiement saute l'étape « En cours »).</p>
+                <?php
+                $target_statuses = Woo_Gads_Api::get_target_statuses($settings ?? array());
+                $available_statuses = array(
+                    'processing' => 'En cours (Processing)',
+                    'completed'  => 'Terminée (Completed)',
+                    'on-hold'    => 'En attente (On hold)',
+                );
+                foreach ($available_statuses as $status_key => $status_label) :
+                ?>
+                    <label style="display: block; margin-bottom: 8px;">
+                        <input type="checkbox" name="woo_gads_settings[order_statuses][]" value="<?php echo esc_attr($status_key); ?>" <?php checked(in_array($status_key, $target_statuses, true)); ?> />
+                        <strong><?php echo esc_html($status_label); ?></strong>
+                        <?php if (in_array($status_key, array('processing', 'completed'), true)) : ?>
+                            <span style="color: #00a32a; font-size: 12px; font-weight: normal; margin-left: 5px;">(Recommandé)</span>
+                        <?php endif; ?>
+                    </label>
+                <?php endforeach; ?>
+                <p class="description">L'API Google Ads sera contactée dès que la commande atteint <strong>au moins l'un de ces statuts</strong>. Si la commande transite par plusieurs de ces statuts (ex: « En cours » puis « Terminée »), le garde-fou anti-doublon garantit qu'elle n'est envoyée qu'une seule fois.</p>
             </td>
         </tr>
         <tr>

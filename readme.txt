@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.3.2
+Stable tag: 1.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.3.3 =
+* Feature / Ergonomie : Remplacement de la liste déroulante par des cases à cocher multi-statuts dans les réglages ("En cours" et "Terminée" cochés par défaut).
+* Fiabilité : Déclenchement dès que la commande atteint l'un des statuts cochés, avec protection anti-doublon absolue (aucune conversion renvoyée si la commande passe successivement d'un statut coché à un autre).
+* Rétrocompatibilité totale avec les configurations de statuts antérieures (chaîne unique).
 
 = 1.3.2 =
 * Amélioration / Filet de sécurité anti-perte : Gestion des commandes qui sautent directement au statut "Terminée" (completed) sans passer par "En cours" (processing), notamment via les modules de paiement (ex: WebToffee Stripe) ou des snippets d'auto-complétion.

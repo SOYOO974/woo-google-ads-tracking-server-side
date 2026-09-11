@@ -3,6 +3,28 @@
 class Woo_Gads_Api
 {
 
+    public static function get_target_statuses($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+
+        if (isset($settings['order_statuses']) && is_array($settings['order_statuses'])) {
+            return $settings['order_statuses'];
+        }
+
+        // Backward compatibility with legacy single-string setting
+        if (isset($settings['order_status']) && !empty($settings['order_status'])) {
+            if ($settings['order_status'] === 'processing_or_completed') {
+                return array('processing', 'completed');
+            }
+            return array($settings['order_status']);
+        }
+
+        // Default if not configured
+        return array('processing', 'completed');
+    }
+
     public function trigger_conversion($order_id, $force = false)
     {
         // Prevent duplicate sending
@@ -19,20 +41,10 @@ class Woo_Gads_Api
         $settings = get_option('woo_gads_settings');
 
         if (!$force) {
-            $target_status = isset($settings['order_status']) ? $settings['order_status'] : 'processing';
+            $target_statuses = self::get_target_statuses($settings);
             $current_status = $order->get_status();
 
-            $status_matches = false;
-            if ($target_status === 'processing_or_completed') {
-                $status_matches = in_array($current_status, array('processing', 'completed'), true);
-            } elseif ($current_status === $target_status) {
-                $status_matches = true;
-            } elseif ($target_status === 'processing' && $current_status === 'completed') {
-                // Safety net: order skipped 'processing' and went straight to 'completed'
-                $status_matches = true;
-            }
-
-            if (!$status_matches) {
+            if (!in_array($current_status, $target_statuses, true)) {
                 return;
             }
         }

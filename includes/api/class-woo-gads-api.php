@@ -9,20 +9,30 @@ class Woo_Gads_Api
             $settings = get_option('woo_gads_settings', array());
         }
 
-        if (isset($settings['order_statuses']) && is_array($settings['order_statuses'])) {
-            return $settings['order_statuses'];
-        }
+        $statuses = array();
 
-        // Backward compatibility with legacy single-string setting
-        if (isset($settings['order_status']) && !empty($settings['order_status'])) {
+        if (isset($settings['order_statuses']) && is_array($settings['order_statuses']) && !empty($settings['order_statuses'])) {
+            $statuses = $settings['order_statuses'];
+        } elseif (isset($settings['order_status']) && !empty($settings['order_status'])) {
+            // Backward compatibility with legacy single-string setting
             if ($settings['order_status'] === 'processing_or_completed') {
-                return array('processing', 'completed');
+                $statuses = array('processing', 'completed');
+            } else {
+                $statuses = array($settings['order_status']);
             }
-            return array($settings['order_status']);
+        } else {
+            // Default if not configured
+            $statuses = array('processing', 'completed');
         }
 
-        // Default if not configured
-        return array('processing', 'completed');
+        // Essential e-commerce rule: In WooCommerce, 'processing' (En cours) means the order was paid.
+        // Once shipped or fulfilled, it naturally moves to 'completed' (Terminée).
+        // Therefore, whenever 'processing' is an enabled trigger status, 'completed' is also legitimate and must be included.
+        if (in_array('processing', $statuses, true) && !in_array('completed', $statuses, true)) {
+            $statuses[] = 'completed';
+        }
+
+        return array_values(array_unique($statuses));
     }
 
     /**

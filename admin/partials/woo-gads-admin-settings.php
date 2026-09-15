@@ -159,10 +159,9 @@ $settings = get_option('woo_gads_settings');
 
                 <div id="woo-gads-external-cookie-fields" style="<?php echo $is_builtin ? 'display:none;' : ''; ?>">
                     <div style="margin-bottom: 10px;">
-                        <button type="button" id="woo-gads-scan-cookies" class="button button-secondary">
-                            <span class="dashicons dashicons-search"
-                                style="vertical-align: middle; margin-top: 4px;"></span>
-                            Scanner les cookies du domaine (ex: Concord)
+                        <button type="button" id="woo-gads-scan-cookies" class="button button-secondary" style="display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; min-height: 30px;">
+                            <span class="dashicons dashicons-search" style="font-size: 16px; width: 16px; height: 16px; line-height: 1; margin: 0; display: inline-flex; align-items: center; justify-content: center;"></span>
+                            <span>Scanner les cookies du domaine (ex: Concord)</span>
                         </button>
                     </div>
 

@@ -360,9 +360,9 @@ $logs = Woo_Gads_Db::get_logs(50);
                 <option value="30">30 derniers jours</option>
                 <option value="60">60 derniers jours (Max Google Ads)</option>
             </select>
-            <button type="button" id="woo-gads-run-rescue-btn" class="button button-primary">
-                <span class="dashicons dashicons-update" style="vertical-align: middle; margin-top: -2px;"></span>
-                Lancer le scan et rattrapage
+            <button type="button" id="woo-gads-run-rescue-btn" class="button button-primary" style="display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; min-height: 32px;">
+                <span class="dashicons dashicons-update" style="font-size: 16px; width: 16px; height: 16px; line-height: 1; margin: 0; display: inline-flex; align-items: center; justify-content: center;"></span>
+                <span>Lancer le scan et rattrapage</span>
             </button>
             <span id="woo-gads-rescue-spinner" class="spinner" style="float: none; margin: 0;"></span>
         </div>

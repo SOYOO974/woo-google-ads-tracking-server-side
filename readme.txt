@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.4.1
+Stable tag: 1.4.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.4.2 =
+* Scan dynamique approfondi des métadonnées : Détection automatique des identifiants de clic (GCLID, WBRAID, GBRAID) sur l'ensemble des champs personnalisés et métadonnées de commande enregistrés par n'importe quel plugin tiers.
+* Forçage de statut optionnel : Ajout d'une option dans le scanner de rattrapage pour forcer l'envoi de toutes les commandes avec identifiant publicitaire, même si leur statut n'est pas coché dans les réglages (ex: commandes « En attente » / `on-hold`).
+* Rapport de diagnostic enrichi : Ventilation détaillée des statuts non déclencheurs et alerte explicite si des commandes possèdent un GCLID mais ont été bloquées par leur statut.
 
 = 1.4.1 =
 * Outil de rattrapage rétroactif : Nouveau scanner interactif dans l'onglet Diagnostic permettant d'analyser les commandes des 7, 14, 30 ou 60 derniers jours et de renvoyer automatiquement toutes les conversions publicitaires manquées à Google Ads.

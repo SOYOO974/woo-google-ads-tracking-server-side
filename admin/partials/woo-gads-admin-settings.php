@@ -112,7 +112,7 @@ $settings = get_option('woo_gads_settings');
                         <textarea name="woo_gads_settings[banner_message]" id="woo_gads_banner_message" rows="2" style="width: 100%; max-width: 600px;"><?php echo esc_textarea($settings['banner_message'] ?? "Nous utilisons des cookies pour assurer le bon fonctionnement du site, mesurer l'audience et personnaliser les publicités."); ?></textarea>
                     </p>
                     
-                    <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px;">
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                         <div>
                             <label for="woo_gads_banner_accept_text"><strong>Bouton Accepter :</strong></label><br>
                             <input type="text" name="woo_gads_settings[banner_accept_text]" id="woo_gads_banner_accept_text" value="<?php echo esc_attr($settings['banner_accept_text'] ?? 'Accepter'); ?>" class="regular-text" style="max-width: 180px;" />
@@ -120,6 +120,25 @@ $settings = get_option('woo_gads_settings');
                         <div>
                             <label for="woo_gads_banner_decline_text"><strong>Bouton Refuser :</strong></label><br>
                             <input type="text" name="woo_gads_settings[banner_decline_text]" id="woo_gads_banner_decline_text" value="<?php echo esc_attr($settings['banner_decline_text'] ?? 'Refuser'); ?>" class="regular-text" style="max-width: 180px;" />
+                        </div>
+                        <div>
+                            <label for="woo_gads_banner_accent_color"><strong>Couleur d'accent (Bouton Accepter) :</strong></label><br>
+                            <div style="display: flex; align-items: center; gap: 8px; margin-top: 3px;">
+                                <input type="color" id="woo_gads_banner_accent_color_picker" value="<?php echo esc_attr($settings['banner_accent_color'] ?? '#111827'); ?>" style="width: 36px; height: 32px; padding: 2px; border: 1px solid #8c8f94; border-radius: 4px; cursor: pointer;" />
+                                <input type="text" name="woo_gads_settings[banner_accent_color]" id="woo_gads_banner_accent_color" value="<?php echo esc_attr($settings['banner_accent_color'] ?? '#111827'); ?>" class="regular-text" style="max-width: 110px;" placeholder="#111827" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px;">
+                        <div>
+                            <label for="woo_gads_banner_position"><strong>Position de la bannière :</strong></label><br>
+                            <?php $pos = $settings['banner_position'] ?? 'bottom-right'; ?>
+                            <select name="woo_gads_settings[banner_position]" id="woo_gads_banner_position" style="max-width: 220px;">
+                                <option value="bottom-right" <?php selected($pos, 'bottom-right'); ?>>Flottant bas-droite (Recommandé)</option>
+                                <option value="bottom-left" <?php selected($pos, 'bottom-left'); ?>>Flottant bas-gauche</option>
+                                <option value="bottom-center" <?php selected($pos, 'bottom-center'); ?>>Centré en bas</option>
+                            </select>
                         </div>
                     </div>
 
@@ -165,6 +184,17 @@ $settings = get_option('woo_gads_settings');
 
                 <script type="text/javascript">
                     (function ($) {
+                        $('#woo_gads_banner_accent_color_picker').on('input change', function () {
+                            $('#woo_gads_banner_accent_color').val($(this).val());
+                        });
+
+                        $('#woo_gads_banner_accent_color').on('input change', function () {
+                            var val = $(this).val();
+                            if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+                                $('#woo_gads_banner_accent_color_picker').val(val);
+                            }
+                        });
+
                         $('#woo_gads_enable_builtin_banner').on('change', function () {
                             if ($(this).is(':checked')) {
                                 $('#woo-gads-builtin-banner-options').slideDown(200);

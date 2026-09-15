@@ -71,6 +71,49 @@ class Woo_Gads_Api
             }
         }
 
+        // Dynamic scan across ALL order metadata for any third-party plugin storing the click ID
+        if ($wc_order && method_exists($wc_order, 'get_meta_data')) {
+            foreach ($wc_order->get_meta_data() as $meta) {
+                $meta_key_lower = strtolower($meta->key);
+                if (strpos($meta_key_lower, '_gads_api') !== false) {
+                    continue;
+                }
+                if (strpos($meta_key_lower, $type) !== false) {
+                    $raw_val = is_string($meta->value) ? trim($meta->value) : '';
+                    if (!empty($raw_val) && strlen($raw_val) > 8 && strlen($raw_val) < 255 && strpos($raw_val, '{') !== 0 && strpos($raw_val, ' ') === false) {
+                        $current_primary = $wc_order->get_meta("_woo_gads_{$type}");
+                        if (empty($current_primary)) {
+                            $wc_order->update_meta_data("_woo_gads_{$type}", $raw_val);
+                            $wc_order->save();
+                            update_post_meta($order_id, "_woo_gads_{$type}", $raw_val);
+                        }
+                        return $raw_val;
+                    }
+                }
+            }
+        }
+
+        $raw_post_metas = get_post_meta($order_id);
+        if (is_array($raw_post_metas)) {
+            foreach ($raw_post_metas as $k => $vals) {
+                $k_lower = strtolower($k);
+                if (strpos($k_lower, '_gads_api') !== false) {
+                    continue;
+                }
+                if (strpos($k_lower, $type) !== false) {
+                    $raw_val = isset($vals[0]) && is_string($vals[0]) ? trim($vals[0]) : '';
+                    if (!empty($raw_val) && strlen($raw_val) > 8 && strlen($raw_val) < 255 && strpos($raw_val, '{') !== 0 && strpos($raw_val, ' ') === false) {
+                        if ($wc_order) {
+                            $wc_order->update_meta_data("_woo_gads_{$type}", $raw_val);
+                            $wc_order->save();
+                        }
+                        update_post_meta($order_id, "_woo_gads_{$type}", $raw_val);
+                        return $raw_val;
+                    }
+                }
+            }
+        }
+
         return '';
     }
 
@@ -93,10 +136,10 @@ class Woo_Gads_Api
 
     /**
      * Batch scan and rescue past orders within a specified window (in days).
-     * Only orders with a valid click ID (GCLID, WBRAID, GBRAID) and an eligible status are sent to Google Ads.
+     * Only orders with a valid click ID (GCLID, WBRAID, GBRAID) are sent to Google Ads.
      * Non-Google Ads orders are safely marked as ignored to prevent over-attribution.
      */
-    public function batch_rescue_orders($days = 14)
+    public function batch_rescue_orders($days = 14, $force_any_status = false)
     {
         $days = max(1, min(90, (int) $days));
         $after_date = date('Y-m-d H:i:s', strtotime("-{$days} days"));
@@ -119,6 +162,8 @@ class Woo_Gads_Api
             'already_sent' => 0,
             'skipped_no_click_id' => 0,
             'skipped_status' => 0,
+            'skipped_statuses_breakdown' => array(),
+            'orders_with_click_id_blocked_by_status' => array(),
             'rescued_success' => 0,
             'rescued_failed' => 0,
             'details' => array(),
@@ -138,16 +183,32 @@ class Woo_Gads_Api
                 continue;
             }
 
-            // 2. Check if status is eligible
-            if (!in_array($order_status, $target_statuses, true)) {
+            // 2. Check for click IDs (with all fallbacks and dynamic scan)
+            $click_ids = self::get_all_order_click_ids($order);
+
+            // 3. Status eligibility check
+            $status_is_eligible = in_array($order_status, $target_statuses, true);
+            if (!$status_is_eligible && !$force_any_status) {
                 $stats['skipped_status']++;
+                $status_name = function_exists('wc_get_order_status_name') ? wc_get_order_status_name($order_status) : $order_status;
+                if (!isset($stats['skipped_statuses_breakdown'][$status_name])) {
+                    $stats['skipped_statuses_breakdown'][$status_name] = 0;
+                }
+                $stats['skipped_statuses_breakdown'][$status_label = $status_name]++;
+
+                // If this order HAS a click ID but was blocked only by its status, report it!
+                if (!empty($click_ids)) {
+                    $stats['orders_with_click_id_blocked_by_status'][] = array(
+                        'order_id' => $order_id,
+                        'status' => $status_name,
+                        'click_ids' => array_keys($click_ids),
+                    );
+                }
                 continue;
             }
 
-            // 3. Check for click IDs (with all fallbacks including WP Gens)
-            $click_ids = self::get_all_order_click_ids($order);
+            // 4. If no click ID found -> Mark as Ignored (Non-Google Ads traffic)
             if (empty($click_ids)) {
-                // No click ID found -> Mark as Ignored to protect against over-attribution
                 $current_status = $order->get_meta('_gads_api_status');
                 if (empty($current_status)) {
                     $current_status = get_post_meta($order_id, '_gads_api_status', true);
@@ -161,7 +222,7 @@ class Woo_Gads_Api
                 continue;
             }
 
-            // 4. Click ID found & eligible status -> Rescue conversion
+            // 5. Click ID found & eligible status -> Rescue conversion
             $order->delete_meta_data('_gads_api_sent');
             $order->save();
             delete_post_meta($order_id, '_gads_api_sent');
@@ -295,7 +356,7 @@ class Woo_Gads_Api
         } elseif ($cookie_value) {
             $consent_log_msg = 'Envoi anonymisé (DENIED - Refusé par l\'utilisateur)';
         } else {
-            $consent_log_msg = 'Envoi anonymisé (DENIED - Cookie absent)';
+            $consent_log_msg = $is_builtin ? 'Envoi anonymisé (DENIED - Sans choix visiteur / Par défaut)' : 'Envoi anonymisé (DENIED - Cookie absent)';
         }
 
         // Extract settings
@@ -560,6 +621,12 @@ class Woo_Gads_Api
 
     private function check_consecutive_missing_cookies()
     {
+        $settings = get_option('woo_gads_settings');
+        // Ne pas alerter si la bannière native est active (le visiteur qui n'interagit pas est anonymisé par défaut, ce n'est pas une anomalie de script)
+        if (!empty($settings['enable_builtin_banner'])) {
+            return;
+        }
+
         // Avoid sending multiple alerts within 24 hours
         if (get_transient('woo_gads_cookie_alert_sent')) {
             return;

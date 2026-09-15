@@ -132,9 +132,10 @@ class Woo_Gads_Admin
         if ($days <= 0) {
             $days = 14;
         }
+        $force_any_status = !empty($_POST['force_any_status']) && $_POST['force_any_status'] === '1';
 
         $api = new Woo_Gads_Api();
-        $stats = $api->batch_rescue_orders($days);
+        $stats = $api->batch_rescue_orders($days, $force_any_status);
 
         wp_send_json_success($stats);
     }

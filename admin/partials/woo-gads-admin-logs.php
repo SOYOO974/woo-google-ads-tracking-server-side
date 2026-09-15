@@ -367,6 +367,13 @@ $logs = Woo_Gads_Db::get_logs(50);
             <span id="woo-gads-rescue-spinner" class="spinner" style="float: none; margin: 0;"></span>
         </div>
 
+        <div style="margin-top: 10px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer; color: #1d2327;">
+                <input type="checkbox" id="woo-gads-rescue-force-status" value="1" />
+                <span><strong>Forcer l'envoi de toutes les commandes avec identifiant Google Ads</strong> quel que soit leur statut actuel (ex: « En attente » / <code>on-hold</code>)</span>
+            </label>
+        </div>
+
         <div id="woo-gads-rescue-results" style="display: none; margin-top: 15px; padding: 12px 15px; border-radius: 4px; font-size: 13px;">
         </div>
     </div>
@@ -486,9 +493,12 @@ jQuery(document).ready(function ($) {
         resultBox.show().html('<em>Analyse en cours des commandes des ' + days + ' derniers jours... Veuillez patienter quelques secondes.</em>')
             .css({ 'background': '#f0f0f1', 'color': '#2c3338', 'border': '1px solid #c3c4c7' });
 
+        var forceAnyStatus = $('#woo-gads-rescue-force-status').is(':checked') ? 1 : 0;
+
         $.post(ajaxurl, {
             action: 'woo_gads_batch_rescue',
             days: days,
+            force_any_status: forceAnyStatus,
             _ajax_nonce: '<?php echo wp_create_nonce("woo_gads_batch_rescue"); ?>'
         }, function(response) {
             btn.prop('disabled', false);
@@ -504,10 +514,30 @@ jQuery(document).ready(function ($) {
                 if (d.rescued_failed > 0) {
                     html += '<li><span style="color:#d63638; font-weight:bold;">❌ Échecs d\'envoi API :</span> ' + d.rescued_failed + '</li>';
                 }
-                html += '<li><span style="color:#646970;">⚪ Commandes hors Google Ads (ignorées sans risque) :</span> ' + d.skipped_no_click_id + '</li>';
-                if (d.skipped_status > 0) {
-                    html += '<li><span style="color:#dba617;">Statut non déclencheur :</span> ' + d.skipped_status + '</li>';
+
+                var breakdownStr = '';
+                if (d.skipped_statuses_breakdown && Object.keys(d.skipped_statuses_breakdown).length > 0) {
+                    var parts = [];
+                    for (var st in d.skipped_statuses_breakdown) {
+                        parts.push(st + ': ' + d.skipped_statuses_breakdown[st]);
+                    }
+                    breakdownStr = ' <small style="color:#646970;">(' + parts.join(', ') + ')</small>';
                 }
+                if (d.skipped_status > 0) {
+                    html += '<li><span style="color:#dba617;">Statut non déclencheur :</span> ' + d.skipped_status + breakdownStr + '</li>';
+                }
+
+                if (d.orders_with_click_id_blocked_by_status && d.orders_with_click_id_blocked_by_status.length > 0) {
+                    html += '<li style="margin-top: 6px; padding: 6px 10px; background: #fff8e5; border-left: 3px solid #dba617; border-radius: 2px;">';
+                    html += '<strong style="color: #996800;">⚠️ ' + d.orders_with_click_id_blocked_by_status.length + ' commande(s) possèdent un GCLID mais ont été ignorées car leur statut n\'est pas coché :</strong><br>';
+                    d.orders_with_click_id_blocked_by_status.forEach(function(b) {
+                        html += '<small>Commande #' + b.order_id + ' (Statut: ' + b.status + ', Clic: ' + b.click_ids.join(', ') + ')</small><br>';
+                    });
+                    html += '<small style="color:#646970;">Pour les envoyer, cochez l\'option ci-dessus « Forcer l\'envoi... » et relancez le scan.</small>';
+                    html += '</li>';
+                }
+
+                html += '<li><span style="color:#646970;">⚪ Commandes hors Google Ads (ignorées sans risque) :</span> ' + d.skipped_no_click_id + '<br><small style="color:#646970; margin-left: 15px;">Commandes sans identifiant de clic en base (trafic SEO naturel, accès direct, etc.). Aucune conversion envoyée pour éviter la sur-attribution (règle v1.3.1).</small></li>';
                 html += '</ul>';
 
                 if (d.details && d.details.length > 0) {

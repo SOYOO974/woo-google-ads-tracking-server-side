@@ -25,16 +25,26 @@ class Woo_Gads_Api
         return array('processing', 'completed');
     }
 
-    public function trigger_conversion($order_id, $force = false)
+    public function on_order_status_changed($order_id, $old_status, $new_status, $order = null)
     {
-        // Prevent duplicate sending
-        $already_sent = get_post_meta($order_id, '_gads_api_sent', true);
-        if ($already_sent === '1' && !$force) {
+        $this->trigger_conversion($order ?: $order_id);
+    }
+
+    public function trigger_conversion($order_id_or_order, $force = false)
+    {
+        $order = ($order_id_or_order instanceof WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
+        if (!$order) {
             return;
         }
 
-        $order = wc_get_order($order_id);
-        if (!$order) {
+        $order_id = $order->get_id();
+
+        // Prevent duplicate sending
+        $already_sent = $order->get_meta('_gads_api_sent');
+        if (empty($already_sent)) {
+            $already_sent = get_post_meta($order_id, '_gads_api_sent', true);
+        }
+        if ($already_sent === '1' && !$force) {
             return;
         }
 
@@ -49,30 +59,36 @@ class Woo_Gads_Api
             }
         }
 
-        $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);
-        $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true);
-        $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true);
+        $gclid = $order->get_meta('_woo_gads_gclid');
+        if (empty($gclid)) { $gclid = get_post_meta($order_id, '_woo_gads_gclid', true); }
+        $wbraid = $order->get_meta('_woo_gads_wbraid');
+        if (empty($wbraid)) { $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true); }
+        $gbraid = $order->get_meta('_woo_gads_gbraid');
+        if (empty($gbraid)) { $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true); }
 
         if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
+            $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
             return;
         }
 
         // Consent Mode v2 check
-        $consent_cookie = isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent';
+        $is_builtin = !empty($settings['enable_builtin_banner']);
+        $consent_cookie = $is_builtin ? 'woo_gads_consent' : (isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent');
         $marketing_consent = false;
 
         // Try to read from $_COOKIE first (if triggered synchronously during checkout)
         // Fallback to order meta (if triggered asynchronously via webhook)
         $cookie_value = null;
         if (isset($_COOKIE[$consent_cookie]) && !empty($_COOKIE[$consent_cookie])) {
-            $cookie_value = stripslashes($_COOKIE[$consent_cookie]);
+            $cookie_value = stripslashes(urldecode($_COOKIE[$consent_cookie]));
         } else {
             // Fallback for prefix match if it's a concord-allow-state cookie
             if (strpos($consent_cookie, 'concord-allow-state-') === 0) {
                 foreach ($_COOKIE as $key => $val) {
                     if (strpos($key, 'concord-allow-state-') === 0) {
-                        $cookie_value = stripslashes($val);
+                        $cookie_value = stripslashes(urldecode($val));
                         break;
                     }
                 }
@@ -80,9 +96,12 @@ class Woo_Gads_Api
         }
 
         if (!$cookie_value) {
-            $meta_cookie = get_post_meta($order_id, '_woo_gads_consent', true);
+            $meta_cookie = $order->get_meta('_woo_gads_consent');
+            if (empty($meta_cookie)) {
+                $meta_cookie = get_post_meta($order_id, '_woo_gads_consent', true);
+            }
             if ($meta_cookie && $meta_cookie !== 'no_cookie_found') {
-                $cookie_value = html_entity_decode($meta_cookie, ENT_QUOTES); // Decode if sanitized as text field
+                $cookie_value = urldecode(html_entity_decode($meta_cookie, ENT_QUOTES)); // Decode if sanitized as text field
             }
         }
 
@@ -109,6 +128,8 @@ class Woo_Gads_Api
         $manager_id = isset($settings['manager_id']) ? preg_replace('/[^0-9]/', '', $settings['manager_id']) : '';
 
         if (empty($developer_token) || empty($merchant_id) || empty($conversion_action_id)) {
+            $order->update_meta_data('_gads_api_status', 'Erreur de configuration');
+            $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Erreur de configuration');
             return;
         }
@@ -119,6 +140,8 @@ class Woo_Gads_Api
 
         if (!$access_token) {
             Woo_Gads_Db::insert_log($order_id, 0, 'N/A', 'N/A', 'OAuth Access Token missing');
+            $order->update_meta_data('_gads_api_status', 'Erreur OAuth');
+            $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Erreur OAuth');
             $this->send_error_email($order_id, 'Token OAuth manquant ou expiré. Veuillez vérifier votre connexion dans les réglages du plugin.');
             return;
@@ -129,6 +152,8 @@ class Woo_Gads_Api
 
         if (!$payload) {
             // Missing essential click IDs
+            $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
             return;
         }
@@ -172,6 +197,9 @@ class Woo_Gads_Api
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
             Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . ' | Erreur HTTP: ' . $error_message);
+            $order->update_meta_data('_gads_api_sent', 'Failed: ' . $error_message);
+            $order->update_meta_data('_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
+            $order->save();
             update_post_meta($order_id, '_gads_api_sent', 'Failed: ' . $error_message);
             update_post_meta($order_id, '_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
             $this->send_error_email($order_id, 'Erreur de requête HTTP cURL/WordPress : ' . $error_message);
@@ -180,11 +208,14 @@ class Woo_Gads_Api
             $error_col = ($http_status != 200) ? 'Erreur API' : '';
             Woo_Gads_Db::insert_log($order_id, $http_status, $payload, json_decode($body, true), $consent_log_msg . ($error_col ? ' | ' . $error_col : ''));
             if ($http_status == 200) {
+                $order->update_meta_data('_gads_api_sent', '1');
+                $order->update_meta_data('_gads_api_status', 'Succès');
+                $order->save();
                 update_post_meta($order_id, '_gads_api_sent', '1');
                 update_post_meta($order_id, '_gads_api_status', 'Succès');
             } else {
-                update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);
-                update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ')');
+                $order->update_meta_data('_gads_api_sent', 'Failed HTTP: ' . $http_status);
+                $order->update_meta_data('_gads_api_status', 'Échec API (' . $http_status . ')');
                 
                 $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
                 if (!empty($body)) {
@@ -210,7 +241,9 @@ class Woo_Gads_Api
                     }
                 }
                 
-                // Mettre à jour avec plus de contexte pour être visible dans le backoffice si on le souhaite
+                $order->update_meta_data('_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
+                $order->save();
+                update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);
                 update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
                 
                 $this->send_error_email($order_id, $error_details);
@@ -224,9 +257,12 @@ class Woo_Gads_Api
     private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent)
     {
         $order_id = $order->get_id();
-        $gclid = get_post_meta($order_id, '_woo_gads_gclid', true);
-        $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true);
-        $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true);
+        $gclid = $order->get_meta('_woo_gads_gclid');
+        if (empty($gclid)) { $gclid = get_post_meta($order_id, '_woo_gads_gclid', true); }
+        $wbraid = $order->get_meta('_woo_gads_wbraid');
+        if (empty($wbraid)) { $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true); }
+        $gbraid = $order->get_meta('_woo_gads_gbraid');
+        if (empty($gbraid)) { $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true); }
 
         $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
 

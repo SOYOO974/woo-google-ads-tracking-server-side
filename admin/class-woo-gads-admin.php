@@ -93,18 +93,30 @@ class Woo_Gads_Admin
             wp_send_json_error('ID de commande invalide.');
         }
 
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            wp_send_json_error('Commande introuvable.');
+        }
+
         // We reset the sent meta so it can be sent again
+        $order->delete_meta_data('_gads_api_sent');
+        $order->save();
         delete_post_meta($order_id, '_gads_api_sent');
         
         $api = new Woo_Gads_Api();
-        $api->trigger_conversion($order_id, true);
+        $api->trigger_conversion($order, true);
 
-        $new_status = get_post_meta($order_id, '_gads_api_status', true);
+        // Reload order to fetch newly written meta
+        $order = wc_get_order($order_id);
+        $new_status = $order->get_meta('_gads_api_status');
+        if (empty($new_status)) {
+            $new_status = get_post_meta($order_id, '_gads_api_status', true);
+        }
         
         if ($new_status === 'Succès') {
             wp_send_json_success('Renvoi réussi');
         } else {
-            wp_send_json_error($new_status);
+            wp_send_json_error($new_status ?: 'Statut inconnu');
         }
     }
 }

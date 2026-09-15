@@ -93,33 +93,90 @@ $settings = get_option('woo_gads_settings');
             </td>
         </tr>
         <tr>
-            <th scope="row">Nom du cookie de consentement (ex: Concord)</th>
+            <th scope="row">Bannière de consentement native</th>
             <td>
-                <div style="margin-bottom: 10px;">
-                    <button type="button" id="woo-gads-scan-cookies" class="button button-secondary">
-                        <span class="dashicons dashicons-search"
-                            style="vertical-align: middle; margin-top: 4px;"></span>
-                        Scanner les cookies du domaine
-                    </button>
-                </div>
+                <?php $is_builtin = !empty($settings['enable_builtin_banner']); ?>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                    <input type="checkbox" name="woo_gads_settings[enable_builtin_banner]" id="woo_gads_enable_builtin_banner" value="1" <?php checked($is_builtin); ?> />
+                    <strong>Activer la bannière de consentement intégrée (Google Consent Mode v2)</strong>
+                </label>
+                <p class="description" style="margin-top: 5px;">
+                    Affiche une bannière native ultra-légère (< 4 Ko) conforme RGPD/CNIL, qui envoie automatiquement les signaux <code>gtag('consent', 'update', ...)</code> au navigateur et gère le cookie <code>woo_gads_consent</code> sans nécessiter de plugin externe (Concord, Complianz, etc.).
+                </p>
 
-                <div id="woo-gads-cookie-selector-wrapper"
-                    style="display: none; margin-bottom: 10px; padding: 15px; background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 4px; border-left: 4px solid #2271b1;">
-                    <p style="margin-top: 0;"><strong>Cookies détectés :</strong></p>
-                    <select id="woo-gads-cookie-dropdown" style="max-width: 300px;"></select>
-                    <p id="woo-gads-cookie-preview"
-                        style="margin-bottom: 0; margin-top: 10px; font-size: 11px; font-family: monospace; word-break: break-all; color: #646970; background: #fff; padding: 5px; border: 1px solid #dcdcde;">
-                        Sélectionnez un cookie pour voir sa valeur.
+                <div id="woo-gads-builtin-banner-options" style="margin-top: 15px; padding: 15px; background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 4px; border-left: 4px solid #2271b1; <?php echo $is_builtin ? '' : 'display:none;'; ?>">
+                    <h4 style="margin-top: 0; margin-bottom: 10px;">Personnalisation de la bannière</h4>
+                    
+                    <p style="margin-bottom: 10px;">
+                        <label for="woo_gads_banner_message"><strong>Message affiché :</strong></label><br>
+                        <textarea name="woo_gads_settings[banner_message]" id="woo_gads_banner_message" rows="2" style="width: 100%; max-width: 600px;"><?php echo esc_textarea($settings['banner_message'] ?? "Nous utilisons des cookies pour assurer le bon fonctionnement du site, mesurer l'audience et personnaliser les publicités."); ?></textarea>
+                    </p>
+                    
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px;">
+                        <div>
+                            <label for="woo_gads_banner_accept_text"><strong>Bouton Accepter :</strong></label><br>
+                            <input type="text" name="woo_gads_settings[banner_accept_text]" id="woo_gads_banner_accept_text" value="<?php echo esc_attr($settings['banner_accept_text'] ?? 'Accepter'); ?>" class="regular-text" style="max-width: 180px;" />
+                        </div>
+                        <div>
+                            <label for="woo_gads_banner_decline_text"><strong>Bouton Refuser :</strong></label><br>
+                            <input type="text" name="woo_gads_settings[banner_decline_text]" id="woo_gads_banner_decline_text" value="<?php echo esc_attr($settings['banner_decline_text'] ?? 'Refuser'); ?>" class="regular-text" style="max-width: 180px;" />
+                        </div>
+                    </div>
+
+                    <p style="margin-bottom: 0;">
+                        <label for="woo_gads_banner_privacy_url"><strong>Lien Politique de Confidentialité (optionnel) :</strong></label><br>
+                        <input type="url" name="woo_gads_settings[banner_privacy_url]" id="woo_gads_banner_privacy_url" value="<?php echo esc_attr($settings['banner_privacy_url'] ?? (function_exists('get_privacy_policy_url') ? get_privacy_policy_url() : '')); ?>" class="regular-text" style="width: 100%; max-width: 450px;" placeholder="https://..." />
+                        <span class="description" style="display: block; margin-top: 3px;">Si renseigné, un lien cliquable sera ajouté au message du bandeau.</span>
                     </p>
                 </div>
+            </td>
+        </tr>
+        <tr id="woo-gads-cookie-setting-row">
+            <th scope="row">Nom du cookie de consentement</th>
+            <td>
+                <div id="woo-gads-builtin-active-notice" style="<?php echo $is_builtin ? '' : 'display:none;'; ?> margin-bottom: 10px; padding: 10px 15px; background: #e7f9ed; border: 1px solid #c3ebce; border-radius: 4px; color: #116633;">
+                    <strong>Bannière native active :</strong> Le cookie <code>woo_gads_consent</code> est automatiquement utilisé et géré par le plugin.
+                </div>
 
-                <input type="text" name="woo_gads_settings[consent_cookie_name]" id="woo_gads_consent_cookie_name"
-                    value="<?php echo esc_attr($settings['consent_cookie_name'] ?? 'concord_consent'); ?>"
-                    class="regular-text" />
-                <p class="description">Le plugin vérifiera la présence de ce cookie avant d'envoyer la conversion.</p>
+                <div id="woo-gads-external-cookie-fields" style="<?php echo $is_builtin ? 'display:none;' : ''; ?>">
+                    <div style="margin-bottom: 10px;">
+                        <button type="button" id="woo-gads-scan-cookies" class="button button-secondary">
+                            <span class="dashicons dashicons-search"
+                                style="vertical-align: middle; margin-top: 4px;"></span>
+                            Scanner les cookies du domaine (ex: Concord)
+                        </button>
+                    </div>
+
+                    <div id="woo-gads-cookie-selector-wrapper"
+                        style="display: none; margin-bottom: 10px; padding: 15px; background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 4px; border-left: 4px solid #2271b1;">
+                        <p style="margin-top: 0;"><strong>Cookies détectés :</strong></p>
+                        <select id="woo-gads-cookie-dropdown" style="max-width: 300px;"></select>
+                        <p id="woo-gads-cookie-preview"
+                            style="margin-bottom: 0; margin-top: 10px; font-size: 11px; font-family: monospace; word-break: break-all; color: #646970; background: #fff; padding: 5px; border: 1px solid #dcdcde;">
+                            Sélectionnez un cookie pour voir sa valeur.
+                        </p>
+                    </div>
+
+                    <input type="text" name="woo_gads_settings[consent_cookie_name]" id="woo_gads_consent_cookie_name"
+                        value="<?php echo esc_attr($settings['consent_cookie_name'] ?? 'concord_consent'); ?>"
+                        class="regular-text" />
+                    <p class="description">Nom du cookie tiers dont la présence autorise la transmission complète (ex: <code>concord_consent</code>).</p>
+                </div>
 
                 <script type="text/javascript">
                     (function ($) {
+                        $('#woo_gads_enable_builtin_banner').on('change', function () {
+                            if ($(this).is(':checked')) {
+                                $('#woo-gads-builtin-banner-options').slideDown(200);
+                                $('#woo-gads-builtin-active-notice').show();
+                                $('#woo-gads-external-cookie-fields').hide();
+                            } else {
+                                $('#woo-gads-builtin-banner-options').slideUp(200);
+                                $('#woo-gads-builtin-active-notice').hide();
+                                $('#woo-gads-external-cookie-fields').show();
+                            }
+                        });
+
                         $('#woo-gads-scan-cookies').on('click', function () {
                             var cookies = document.cookie.split('; ');
                             var $dropdown = $('#woo-gads-cookie-dropdown');

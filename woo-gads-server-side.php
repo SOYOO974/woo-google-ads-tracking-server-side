@@ -3,7 +3,7 @@
  * Plugin Name:       Woo Google Ads Server-Side Tracking
  * Plugin URI:        https://example.com
  * Description:       Envoi des conversions WooCommerce à l'API Google Ads en server-side, respectant le consentement.
- * Version:           1.3.4
+ * Version:           1.4.0
  * Author:            SOYOO
  * Text Domain:       woo-gads-server-side
  * Domain Path:       /languages
@@ -14,7 +14,7 @@ if (!defined('WPINC')) {
 	die;
 }
 
-define('WOO_GADS_VERSION', '1.3.4');
+define('WOO_GADS_VERSION', '1.4.0');
 define('WOO_GADS_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WOO_GADS_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -31,6 +31,13 @@ $myUpdateChecker = PucFactory::buildUpdateChecker(
 // Set the branch that contains the stable release.
 $myUpdateChecker->setBranch('main');
 $myUpdateChecker->getVcsApi()->enableReleaseAssets();
+
+// Declare compatibility with WooCommerce High-Performance Order Storage (HPOS)
+add_action('before_woocommerce_init', function () {
+	if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
+		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true);
+	}
+});
 
 require plugin_dir_path(__FILE__) . 'includes/class-woo-gads-activator.php';
 require plugin_dir_path(__FILE__) . 'includes/class-woo-gads-deactivator.php';

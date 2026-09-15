@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.3.4
+Stable tag: 1.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -22,7 +22,13 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 
 == Changelog ==
 
-= 1.3.4 =
+= 1.4.0 =
+* Compatibilité majeure HPOS : Déclaration officielle de compatibilité avec le stockage haute performance de WooCommerce (High-Performance Order Storage / Custom Order Tables).
+* Abstraction CRUD WooCommerce : Remplacement des fonctions obsolètes WordPress (get_post_meta, update_post_meta, delete_post_meta) par l'API native WC_Order ($order->get_meta, $order->update_meta_data, $order->save), garantissant la persistance des clics et du consentement que HPOS soit actif avec ou sans synchronisation.
+* Multi-hooks de commande universels : Capture des click IDs et du consentement compatible avec les blocs de commande Gutenberg (WooCommerce Blocks Store API), le checkout classique et les passerelles de paiement express (Apple Pay, PayPal Express, etc.).
+* Déclencheurs de statut résilients : Écoute ajoutée sur woocommerce_payment_complete et woocommerce_order_status_changed pour ne rater aucune conversion même si la passerelle saute l'étape de transition standard.
+* Résilience des cookies & ITP : Synchronisation automatique bidirectionnelle entre localStorage et document.cookie avec attributs SameSite=Lax pour éviter la perte des click IDs sous Safari ITP.
+* Diagnostic & Inspection enrichis : Ajout d'une carte d'état de l'architecture HPOS, clarification entre absence de cookie et méta non enregistrée, et ajout d'un inspecteur de métadonnées brutes en 1 clic pour chaque commande auditée.
 * Correctif affichage : Nettoyage du code HTML brut échappé dans la colonne Résultat API de l'audit des commandes et ajout d'un style couleur propre (vert, orange, gris, rouge).
 * Localisation : Affichage du nom traduit en français du statut de commande (ex: « Annulée » au lieu de « cancelled »).
 * Fiabilité OAuth (Auto-recovery 401) : Purge immédiate du transient de cache et rafraîchissement automatique du token d'accès auprès de Google en cas d'erreur HTTP 401, avec réessai transparent de la conversion avant toute alerte email.

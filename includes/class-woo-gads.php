@@ -48,13 +48,22 @@ class Woo_Gads
         $plugin_public = new Woo_Gads_Public($this->get_plugin_name(), $this->get_version());
 
         $this->loader->add_action('wp_enqueue_scripts', $plugin_public, 'enqueue_scripts');
+
+        // Capture click IDs and consent across all checkout modes (Classic Shortcode, Blocks Store API, Processed, New Order)
         $this->loader->add_action('woocommerce_checkout_update_order_meta', $plugin_public, 'save_click_ids', 10, 2);
+        $this->loader->add_action('woocommerce_store_api_checkout_update_order_meta', $plugin_public, 'save_click_ids', 10, 1);
+        $this->loader->add_action('woocommerce_checkout_order_processed', $plugin_public, 'save_click_ids', 10, 3);
+        $this->loader->add_action('woocommerce_new_order', $plugin_public, 'save_click_ids', 10, 2);
 
         $plugin_api = new Woo_Gads_Api();
         // Hook into order status processing, completed, and on-hold
-        $this->loader->add_action('woocommerce_order_status_on-hold', $plugin_api, 'trigger_conversion');
-        $this->loader->add_action('woocommerce_order_status_processing', $plugin_api, 'trigger_conversion');
-        $this->loader->add_action('woocommerce_order_status_completed', $plugin_api, 'trigger_conversion');
+        $this->loader->add_action('woocommerce_order_status_on-hold', $plugin_api, 'trigger_conversion', 10, 1);
+        $this->loader->add_action('woocommerce_order_status_processing', $plugin_api, 'trigger_conversion', 10, 1);
+        $this->loader->add_action('woocommerce_order_status_completed', $plugin_api, 'trigger_conversion', 10, 1);
+
+        // Safety nets: trigger on payment complete and any status changes
+        $this->loader->add_action('woocommerce_payment_complete', $plugin_api, 'trigger_conversion', 10, 1);
+        $this->loader->add_action('woocommerce_order_status_changed', $plugin_api, 'on_order_status_changed', 10, 4);
     }
 
     public function run()

@@ -206,13 +206,11 @@ $logs = Woo_Gads_Db::get_logs(50);
                             $consent = get_post_meta($order_id, '_woo_gads_consent', true);
                         }
 
-                        // Click IDs
-                        $gclid = $order->get_meta('_woo_gads_gclid');
-                        if (empty($gclid)) { $gclid = get_post_meta($order_id, '_woo_gads_gclid', true); }
-                        $wbraid = $order->get_meta('_woo_gads_wbraid');
-                        if (empty($wbraid)) { $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true); }
-                        $gbraid = $order->get_meta('_woo_gads_gbraid');
-                        if (empty($gbraid)) { $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true); }
+                        // Click IDs (Native + WP Gens fallback)
+                        $gclid = Woo_Gads_Api::get_order_click_id($order, 'gclid');
+                        $wbraid = Woo_Gads_Api::get_order_click_id($order, 'wbraid');
+                        $gbraid = Woo_Gads_Api::get_order_click_id($order, 'gbraid');
+                        $wpgens_gclid = $order->get_meta('_wpgens_gclid') ?: ($order->get_meta('wpgens_gclid') ?: (get_post_meta($order_id, '_wpgens_gclid', true) ?: get_post_meta($order_id, 'wpgens_gclid', true)));
                         $ids = array_filter(array('GCLID' => $gclid, 'WBRAID' => $wbraid, 'GBRAID' => $gbraid));
 
                         // API Status & Sent
@@ -322,6 +320,9 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 </div>
                                 <div id="meta-<?php echo esc_attr($order_id); ?>" style="display:none; margin-top:8px; padding:8px 10px; background:#f6f7f7; border:1px solid #dcdcde; border-radius:4px; font-family:monospace; font-size:11px; text-align:left; line-height:1.6;">
                                     <div><strong>_woo_gads_gclid :</strong> <?php echo esc_html($gclid ?: '(vide)'); ?></div>
+                                    <?php if (!empty($wpgens_gclid)) : ?>
+                                        <div><strong>_wpgens_gclid (WP Gens) :</strong> <span style="color:#00a32a; font-weight:bold;"><?php echo esc_html($wpgens_gclid); ?></span></div>
+                                    <?php endif; ?>
                                     <div><strong>_woo_gads_wbraid :</strong> <?php echo esc_html($wbraid ?: '(vide)'); ?></div>
                                     <div><strong>_woo_gads_gbraid :</strong> <?php echo esc_html($gbraid ?: '(vide)'); ?></div>
                                     <div><strong>_woo_gads_consent :</strong> <?php echo esc_html($consent ?: '(vide)'); ?></div>
@@ -337,6 +338,37 @@ $logs = Woo_Gads_Db::get_logs(50);
                 ?>
             </tbody>
         </table>
+    </div>
+
+    <div class="card" style="max-width: 100%; margin-top: 25px; margin-bottom: 25px; border-left: 4px solid #2271b1;">
+        <h3 style="margin-top: 0;">3. Outil de rattrapage rétroactif (Conversions passées)</h3>
+        <p>
+            Cet outil analyse les commandes WooCommerce passées (HPOS & tables historiques) sur la période sélectionnée afin de renvoyer automatiquement à Google Ads toutes les conversions publicitaires qui n'ont pas encore été transmises.
+        </p>
+        <ul style="list-style: disc; margin-left: 20px; color: #50575e; font-size: 13px; line-height: 1.6;">
+            <li><strong>Détection multi-sources des clics :</strong> Recherche les identifiants de clic (<code>gclid</code>, <code>wbraid</code>, <code>gbraid</code>) dans les métadonnées natives ainsi que dans les extensions tierces de tracking (ex: WP Gens UTM Tracking).</li>
+            <li><strong>Horodatage historique réel :</strong> Chaque commande est transmise avec sa date et heure réelles de création (<code>conversionDateTime</code>) pour garantir une attribution exacte et sans décalage dans vos rapports Google Ads.</li>
+            <li><strong>Protection anti-sur-attribution :</strong> Les commandes directes, organiques ou hors Google Ads (sans aucun identifiant de clic) sont ignorées et ne font l'objet d'aucun appel API.</li>
+            <li><strong>Anti-doublon strict :</strong> Les commandes déjà transmises avec succès à Google Ads ne sont jamais renvoyées.</li>
+        </ul>
+
+        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 15px; margin-bottom: 5px;">
+            <label for="woo-gads-rescue-days" style="font-weight: 600;">Période à analyser :</label>
+            <select id="woo-gads-rescue-days" style="padding: 4px 8px;">
+                <option value="7">7 derniers jours</option>
+                <option value="14" selected>14 derniers jours (Recommandé)</option>
+                <option value="30">30 derniers jours</option>
+                <option value="60">60 derniers jours (Max Google Ads)</option>
+            </select>
+            <button type="button" id="woo-gads-run-rescue-btn" class="button button-primary">
+                <span class="dashicons dashicons-update" style="vertical-align: middle; margin-top: -2px;"></span>
+                Lancer le scan et rattrapage
+            </button>
+            <span id="woo-gads-rescue-spinner" class="spinner" style="float: none; margin: 0;"></span>
+        </div>
+
+        <div id="woo-gads-rescue-results" style="display: none; margin-top: 15px; padding: 12px 15px; border-radius: 4px; font-size: 13px;">
+        </div>
     </div>
 
     <h2>Dernières requêtes API (Limite 50)</h2>
@@ -436,6 +468,74 @@ jQuery(document).ready(function ($) {
         e.preventDefault();
         var targetId = $(this).data('target');
         $('#' + targetId).slideToggle(150);
+    });
+
+    $('#woo-gads-run-rescue-btn').click(function(e) {
+        e.preventDefault();
+        var btn = $(this);
+        var spinner = $('#woo-gads-rescue-spinner');
+        var resultBox = $('#woo-gads-rescue-results');
+        var days = $('#woo-gads-rescue-days').val();
+
+        if (!confirm('Voulez-vous lancer le scan et renvoyer toutes les conversions éligibles des ' + days + ' derniers jours ?')) {
+            return;
+        }
+
+        btn.prop('disabled', true);
+        spinner.addClass('is-active');
+        resultBox.show().html('<em>Analyse en cours des commandes des ' + days + ' derniers jours... Veuillez patienter quelques secondes.</em>')
+            .css({ 'background': '#f0f0f1', 'color': '#2c3338', 'border': '1px solid #c3c4c7' });
+
+        $.post(ajaxurl, {
+            action: 'woo_gads_batch_rescue',
+            days: days,
+            _ajax_nonce: '<?php echo wp_create_nonce("woo_gads_batch_rescue"); ?>'
+        }, function(response) {
+            btn.prop('disabled', false);
+            spinner.removeClass('is-active');
+
+            if (response.success && response.data) {
+                var d = response.data;
+                var html = '<strong>Rapport de rattrapage terminé (' + d.days + ' derniers jours) :</strong><br>';
+                html += '<ul style="margin: 8px 0 8px 20px; list-style: square;">';
+                html += '<li><strong>Commandes analysées :</strong> ' + d.total_inspected + '</li>';
+                html += '<li><span style="color:#00a32a;">✅ Déjà envoyées auparavant (inchangées) :</span> ' + d.already_sent + '</li>';
+                html += '<li><span style="color:#2271b1; font-weight:bold;">🚀 Conversions rattrapées & envoyées avec succès :</span> ' + d.rescued_success + '</li>';
+                if (d.rescued_failed > 0) {
+                    html += '<li><span style="color:#d63638; font-weight:bold;">❌ Échecs d\'envoi API :</span> ' + d.rescued_failed + '</li>';
+                }
+                html += '<li><span style="color:#646970;">⚪ Commandes hors Google Ads (ignorées sans risque) :</span> ' + d.skipped_no_click_id + '</li>';
+                if (d.skipped_status > 0) {
+                    html += '<li><span style="color:#dba617;">Statut non déclencheur :</span> ' + d.skipped_status + '</li>';
+                }
+                html += '</ul>';
+
+                if (d.details && d.details.length > 0) {
+                    html += '<div style="margin-top: 10px; max-height: 150px; overflow-y: auto; background: #fff; padding: 8px; border: 1px solid #ccd0d4; font-family: monospace; font-size: 11px;">';
+                    d.details.forEach(function(item) {
+                        var color = item.status === 'success' ? '#00a32a' : '#d63638';
+                        html += '<div style="color:' + color + ';">Commande #' + item.order_id + ' : ' + item.message + '</div>';
+                    });
+                    html += '</div>';
+                }
+
+                var bg = d.rescued_failed > 0 ? '#fcf9e8' : '#e7f9ed';
+                var border = d.rescued_failed > 0 ? '#dba617' : '#c3ebce';
+                var text = d.rescued_failed > 0 ? '#614800' : '#116633';
+
+                resultBox.html(html).css({ 'background': bg, 'border': '1px solid ' + border, 'color': text });
+
+                if (d.rescued_success > 0 || d.skipped_no_click_id > 0) {
+                    resultBox.append('<div style="margin-top: 10px;"><button type="button" class="button button-secondary" onclick="location.reload();">Actualiser la page pour voir les nouveaux statuts</button></div>');
+                }
+            } else {
+                resultBox.html('<strong>Erreur :</strong> ' + (response.data || 'Impossible d\'exécuter le scan.')).css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf' });
+            }
+        }).fail(function() {
+            btn.prop('disabled', false);
+            spinner.removeClass('is-active');
+            resultBox.html('<strong>Erreur réseau.</strong> Le serveur a mis trop de temps à répondre ou une erreur HTTP est survenue.').css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf' });
+        });
     });
 });
 </script>

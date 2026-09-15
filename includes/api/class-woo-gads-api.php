@@ -25,6 +25,180 @@ class Woo_Gads_Api
         return array('processing', 'completed');
     }
 
+    /**
+     * Helper to retrieve a click ID from order meta with all known fallbacks (HPOS, postmeta, WP Gens UTM, generic)
+     */
+    public static function get_order_click_id($order, $type = 'gclid')
+    {
+        $wc_order = ($order instanceof \WC_Order) ? $order : (is_numeric($order) ? wc_get_order($order) : null);
+        $order_id = $wc_order ? $wc_order->get_id() : (is_numeric($order) ? (int) $order : 0);
+
+        if (!$order_id) {
+            return '';
+        }
+
+        $keys = array();
+        if ($type === 'gclid') {
+            $keys = array('_woo_gads_gclid', '_wpgens_gclid', 'wpgens_gclid', '_gclid', 'gclid');
+        } elseif ($type === 'wbraid') {
+            $keys = array('_woo_gads_wbraid', '_wpgens_wbraid', 'wpgens_wbraid', '_wbraid', 'wbraid');
+        } elseif ($type === 'gbraid') {
+            $keys = array('_woo_gads_gbraid', '_wpgens_gbraid', 'wpgens_gbraid', '_gbraid', 'gbraid');
+        }
+
+        foreach ($keys as $key) {
+            $val = '';
+            if ($wc_order) {
+                $val = $wc_order->get_meta($key);
+            }
+            if (empty($val)) {
+                $val = get_post_meta($order_id, $key, true);
+            }
+            if (!empty($val) && is_string($val)) {
+                $val = trim($val);
+                if (!empty($val)) {
+                    // Backfill primary _woo_gads_{type} key if it wasn't set, ensuring HPOS and postmeta sync
+                    if ($wc_order) {
+                        $current_primary = $wc_order->get_meta("_woo_gads_{$type}");
+                        if (empty($current_primary)) {
+                            $wc_order->update_meta_data("_woo_gads_{$type}", $val);
+                            $wc_order->save();
+                            update_post_meta($order_id, "_woo_gads_{$type}", $val);
+                        }
+                    }
+                    return $val;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Returns all captured click IDs for an order as an associative array ('GCLID' => ..., 'WBRAID' => ..., 'GBRAID' => ...)
+     */
+    public static function get_all_order_click_ids($order)
+    {
+        $gclid = self::get_order_click_id($order, 'gclid');
+        $wbraid = self::get_order_click_id($order, 'wbraid');
+        $gbraid = self::get_order_click_id($order, 'gbraid');
+
+        $ids = array();
+        if (!empty($gclid)) { $ids['GCLID'] = $gclid; }
+        if (!empty($wbraid)) { $ids['WBRAID'] = $wbraid; }
+        if (!empty($gbraid)) { $ids['GBRAID'] = $gbraid; }
+
+        return $ids;
+    }
+
+    /**
+     * Batch scan and rescue past orders within a specified window (in days).
+     * Only orders with a valid click ID (GCLID, WBRAID, GBRAID) and an eligible status are sent to Google Ads.
+     * Non-Google Ads orders are safely marked as ignored to prevent over-attribution.
+     */
+    public function batch_rescue_orders($days = 14)
+    {
+        $days = max(1, min(90, (int) $days));
+        $after_date = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+
+        $settings = get_option('woo_gads_settings', array());
+        $target_statuses = self::get_target_statuses($settings);
+
+        // Fetch orders using WC_Order_Query
+        $orders = wc_get_orders(array(
+            'limit' => 300,
+            'date_created' => '>=' . $after_date,
+            'orderby' => 'date',
+            'order' => 'DESC',
+            'type' => 'shop_order',
+        ));
+
+        $stats = array(
+            'days' => $days,
+            'total_inspected' => count($orders),
+            'already_sent' => 0,
+            'skipped_no_click_id' => 0,
+            'skipped_status' => 0,
+            'rescued_success' => 0,
+            'rescued_failed' => 0,
+            'details' => array(),
+        );
+
+        foreach ($orders as $order) {
+            $order_id = $order->get_id();
+            $order_status = $order->get_status();
+            $api_sent = $order->get_meta('_gads_api_sent');
+            if (empty($api_sent)) {
+                $api_sent = get_post_meta($order_id, '_gads_api_sent', true);
+            }
+
+            // 1. If already sent successfully, skip
+            if ($api_sent === '1') {
+                $stats['already_sent']++;
+                continue;
+            }
+
+            // 2. Check if status is eligible
+            if (!in_array($order_status, $target_statuses, true)) {
+                $stats['skipped_status']++;
+                continue;
+            }
+
+            // 3. Check for click IDs (with all fallbacks including WP Gens)
+            $click_ids = self::get_all_order_click_ids($order);
+            if (empty($click_ids)) {
+                // No click ID found -> Mark as Ignored to protect against over-attribution
+                $current_status = $order->get_meta('_gads_api_status');
+                if (empty($current_status)) {
+                    $current_status = get_post_meta($order_id, '_gads_api_status', true);
+                }
+                if (empty($current_status) || strpos($current_status, 'En attente') !== false) {
+                    $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+                    $order->save();
+                    update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+                }
+                $stats['skipped_no_click_id']++;
+                continue;
+            }
+
+            // 4. Click ID found & eligible status -> Rescue conversion
+            $order->delete_meta_data('_gads_api_sent');
+            $order->save();
+            delete_post_meta($order_id, '_gads_api_sent');
+
+            $this->trigger_conversion($order, true);
+
+            // Reload fresh order meta
+            $fresh_order = wc_get_order($order_id);
+            $new_sent = $fresh_order ? $fresh_order->get_meta('_gads_api_sent') : '';
+            if (empty($new_sent)) {
+                $new_sent = get_post_meta($order_id, '_gads_api_sent', true);
+            }
+            $new_status = $fresh_order ? $fresh_order->get_meta('_gads_api_status') : '';
+            if (empty($new_status)) {
+                $new_status = get_post_meta($order_id, '_gads_api_status', true);
+            }
+
+            if ($new_sent === '1') {
+                $stats['rescued_success']++;
+                $stats['details'][] = array(
+                    'order_id' => $order_id,
+                    'status' => 'success',
+                    'message' => 'Envoyée avec succès (' . implode(', ', array_keys($click_ids)) . ')',
+                );
+            } else {
+                $stats['rescued_failed']++;
+                $stats['details'][] = array(
+                    'order_id' => $order_id,
+                    'status' => 'failed',
+                    'message' => $new_status ?: 'Échec de transmission',
+                );
+            }
+        }
+
+        return $stats;
+    }
+
     public function on_order_status_changed($order_id, $old_status, $new_status, $order = null)
     {
         $this->trigger_conversion($order ?: $order_id);
@@ -34,7 +208,7 @@ class Woo_Gads_Api
     {
         $order = ($order_id_or_order instanceof WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
         if (!$order) {
-            return;
+            return array('success' => false, 'status' => 'order_not_found');
         }
 
         $order_id = $order->get_id();
@@ -45,7 +219,7 @@ class Woo_Gads_Api
             $already_sent = get_post_meta($order_id, '_gads_api_sent', true);
         }
         if ($already_sent === '1' && !$force) {
-            return;
+            return array('success' => true, 'status' => 'already_sent');
         }
 
         $settings = get_option('woo_gads_settings');
@@ -55,22 +229,19 @@ class Woo_Gads_Api
             $current_status = $order->get_status();
 
             if (!in_array($current_status, $target_statuses, true)) {
-                return;
+                return array('success' => false, 'status' => 'ineligible_status');
             }
         }
 
-        $gclid = $order->get_meta('_woo_gads_gclid');
-        if (empty($gclid)) { $gclid = get_post_meta($order_id, '_woo_gads_gclid', true); }
-        $wbraid = $order->get_meta('_woo_gads_wbraid');
-        if (empty($wbraid)) { $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true); }
-        $gbraid = $order->get_meta('_woo_gads_gbraid');
-        if (empty($gbraid)) { $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true); }
+        $gclid = self::get_order_click_id($order, 'gclid');
+        $wbraid = self::get_order_click_id($order, 'wbraid');
+        $gbraid = self::get_order_click_id($order, 'gbraid');
 
         if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
             $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
             $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
-            return;
+            return array('success' => false, 'status' => 'skipped_no_click_id');
         }
 
         // Consent Mode v2 check
@@ -99,6 +270,12 @@ class Woo_Gads_Api
             $meta_cookie = $order->get_meta('_woo_gads_consent');
             if (empty($meta_cookie)) {
                 $meta_cookie = get_post_meta($order_id, '_woo_gads_consent', true);
+            }
+            if (empty($meta_cookie)) {
+                $meta_cookie = $order->get_meta('_concord_consent');
+            }
+            if (empty($meta_cookie)) {
+                $meta_cookie = get_post_meta($order_id, '_concord_consent', true);
             }
             if ($meta_cookie && $meta_cookie !== 'no_cookie_found') {
                 $cookie_value = urldecode(html_entity_decode($meta_cookie, ENT_QUOTES)); // Decode if sanitized as text field
@@ -131,7 +308,7 @@ class Woo_Gads_Api
             $order->update_meta_data('_gads_api_status', 'Erreur de configuration');
             $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Erreur de configuration');
-            return;
+            return array('success' => false, 'status' => 'config_error');
         }
 
         // Get Access Token
@@ -144,7 +321,7 @@ class Woo_Gads_Api
             $order->save();
             update_post_meta($order_id, '_gads_api_status', 'Erreur OAuth');
             $this->send_error_email($order_id, 'Token OAuth manquant ou expiré. Veuillez vérifier votre connexion dans les réglages du plugin.');
-            return;
+            return array('success' => false, 'status' => 'oauth_error');
         }
 
         // Build Payload
@@ -203,6 +380,8 @@ class Woo_Gads_Api
             update_post_meta($order_id, '_gads_api_sent', 'Failed: ' . $error_message);
             update_post_meta($order_id, '_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
             $this->send_error_email($order_id, 'Erreur de requête HTTP cURL/WordPress : ' . $error_message);
+            $this->check_consecutive_missing_cookies();
+            return array('success' => false, 'status' => 'http_error', 'message' => $error_message);
         } else {
             // Success or logical failure
             $error_col = ($http_status != 200) ? 'Erreur API' : '';
@@ -213,6 +392,8 @@ class Woo_Gads_Api
                 $order->save();
                 update_post_meta($order_id, '_gads_api_sent', '1');
                 update_post_meta($order_id, '_gads_api_status', 'Succès');
+                $this->check_consecutive_missing_cookies();
+                return array('success' => true, 'status' => 'success');
             } else {
                 $order->update_meta_data('_gads_api_sent', 'Failed HTTP: ' . $http_status);
                 $order->update_meta_data('_gads_api_status', 'Échec API (' . $http_status . ')');
@@ -247,22 +428,18 @@ class Woo_Gads_Api
                 update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
                 
                 $this->send_error_email($order_id, $error_details);
+                $this->check_consecutive_missing_cookies();
+                return array('success' => false, 'status' => 'api_error', 'message' => $error_details);
             }
         }
-
-        // Check if cookies have been missing consecutively in recent logs
-        $this->check_consecutive_missing_cookies();
     }
 
     private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent)
     {
         $order_id = $order->get_id();
-        $gclid = $order->get_meta('_woo_gads_gclid');
-        if (empty($gclid)) { $gclid = get_post_meta($order_id, '_woo_gads_gclid', true); }
-        $wbraid = $order->get_meta('_woo_gads_wbraid');
-        if (empty($wbraid)) { $wbraid = get_post_meta($order_id, '_woo_gads_wbraid', true); }
-        $gbraid = $order->get_meta('_woo_gads_gbraid');
-        if (empty($gbraid)) { $gbraid = get_post_meta($order_id, '_woo_gads_gbraid', true); }
+        $gclid = self::get_order_click_id($order, 'gclid');
+        $wbraid = self::get_order_click_id($order, 'wbraid');
+        $gbraid = self::get_order_click_id($order, 'gbraid');
 
         $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
 
@@ -270,9 +447,14 @@ class Woo_Gads_Api
             return false;
         }
 
+        // Use real order creation timestamp for accurate historical attribution in Google Ads
+        $date_created = $order->get_date_created();
+        $conversion_timestamp = $date_created ? $date_created->getTimestamp() : time();
+        $conversion_date_time = gmdate('Y-m-d H:i:s+00:00', $conversion_timestamp);
+
         $conversion = array(
             'conversionAction' => "customers/{$merchant_id}/conversionActions/{$conversion_action_id}",
-            'conversionDateTime' => gmdate('Y-m-d H:i:s+00:00'),
+            'conversionDateTime' => $conversion_date_time,
             'conversionValue' => (float) $order->get_total(),
             'currencyCode' => $order->get_currency(),
             'orderId' => (string) $order_id,

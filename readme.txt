@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.4.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,14 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.4.1 =
+* Outil de rattrapage rétroactif : Nouveau scanner interactif dans l'onglet Diagnostic permettant d'analyser les commandes des 7, 14, 30 ou 60 derniers jours et de renvoyer automatiquement toutes les conversions publicitaires manquées à Google Ads.
+* Détection multi-sources des clics : Résolution avancée des identifiants (gclid, wbraid, gbraid) inspectant les métadonnées natives, les extensions tierces de tracking UTM (notamment WP Gens UTM Tracking via `_wpgens_gclid`), ainsi que les cookies et paramètres d'URL au checkout.
+* Rétro-synchronisation HPOS automatique : Dès qu'un identifiant de clic est découvert dans une extension tierce ou méta de secours, il est automatiquement rétro-sauvegardé dans les métas natives HPOS de la commande (`_woo_gads_gclid`).
+* Horodatage historique réel (conversionDateTime) : Utilisation de la date et heure réelles de passage de commande (`$order->get_date_created()`) au lieu de la date courante de la requête API, assurant une attribution historique exacte dans Google Ads sans fausser les rapports.
+* Protection absolue anti-sur-attribution : Les commandes organiques, directes ou hors Google Ads (sans aucun identifiant de clic) sont ignorées et ne font l'objet d'aucun appel API (strict respect des enseignements de la v1.3.1).
+* Inspection WP Gens dans le backoffice : Affichage explicite de l'identifiant détecté via WP Gens dans le volet « Détails métas » de chaque commande auditée.
 
 = 1.4.0 =
 * Compatibilité majeure HPOS : Déclaration officielle de compatibilité avec le stockage haute performance de WooCommerce (High-Performance Order Storage / Custom Order Tables).

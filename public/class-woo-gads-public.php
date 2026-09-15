@@ -182,9 +182,19 @@ class Woo_Gads_Public
 
         $paramsToSave = array('gclid', 'wbraid', 'gbraid');
         foreach ($paramsToSave as $param) {
+            $value = '';
             $cookie_name = 'woo_gads_' . $param;
-            if (isset($_COOKIE[$cookie_name]) && !empty($_COOKIE[$cookie_name])) {
+            if (!empty($_COOKIE[$cookie_name])) {
                 $value = sanitize_text_field($_COOKIE[$cookie_name]);
+            } elseif (!empty($_COOKIE[$param])) {
+                $value = sanitize_text_field($_COOKIE[$param]);
+            } elseif (!empty($_COOKIE['wpgens_' . $param])) {
+                $value = sanitize_text_field($_COOKIE['wpgens_' . $param]);
+            } elseif (!empty($_GET[$param])) {
+                $value = sanitize_text_field($_GET[$param]);
+            }
+
+            if (!empty($value)) {
                 $order->update_meta_data('_woo_gads_' . $param, $value);
                 update_post_meta($order_id, '_woo_gads_' . $param, $value);
             }

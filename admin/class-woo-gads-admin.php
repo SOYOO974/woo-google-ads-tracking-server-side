@@ -119,4 +119,23 @@ class Woo_Gads_Admin
             wp_send_json_error($new_status ?: 'Statut inconnu');
         }
     }
+
+    public function batch_rescue()
+    {
+        check_ajax_referer('woo_gads_batch_rescue', '_ajax_nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error('Permission refusée.');
+        }
+
+        $days = isset($_POST['days']) ? intval($_POST['days']) : 14;
+        if ($days <= 0) {
+            $days = 14;
+        }
+
+        $api = new Woo_Gads_Api();
+        $stats = $api->batch_rescue_orders($days);
+
+        wp_send_json_success($stats);
+    }
 }

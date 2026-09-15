@@ -38,6 +38,7 @@ class Woo_Gads
         $this->loader->add_action('admin_init', $plugin_admin, 'register_settings');
         $this->loader->add_action('wp_ajax_woo_gads_test_connection', $plugin_admin, 'test_connection');
         $this->loader->add_action('wp_ajax_woo_gads_retry_conversion', $plugin_admin, 'retry_conversion');
+        $this->loader->add_action('wp_ajax_woo_gads_batch_rescue', $plugin_admin, 'batch_rescue');
 
         $plugin_basename = plugin_basename(WOO_GADS_PLUGIN_DIR . 'woo-gads-server-side.php');
         $this->loader->add_filter('plugin_action_links_' . $plugin_basename, $plugin_admin, 'add_action_links');

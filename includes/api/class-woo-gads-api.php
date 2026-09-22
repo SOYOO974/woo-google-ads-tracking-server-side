@@ -180,6 +180,9 @@ class Woo_Gads_Api
         );
 
         foreach ($orders as $order) {
+            if (!$order instanceof \WC_Order || is_a($order, 'WC_Order_Refund')) {
+                continue;
+            }
             $order_id = $order->get_id();
             $order_status = $order->get_status();
             $api_sent = $order->get_meta('_gads_api_sent');
@@ -277,8 +280,8 @@ class Woo_Gads_Api
 
     public function trigger_conversion($order_id_or_order, $force = false)
     {
-        $order = ($order_id_or_order instanceof WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
-        if (!$order) {
+        $order = ($order_id_or_order instanceof \WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
+        if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
             return array('success' => false, 'status' => 'order_not_found');
         }
 
@@ -551,7 +554,7 @@ class Woo_Gads_Api
         if ($marketing_consent) {
             $user_identifier = array();
 
-            $email = $order->get_billing_email();
+            $email = method_exists($order, 'get_billing_email') ? $order->get_billing_email() : '';
             if (!empty($email)) {
                 $user_identifier[] = array(
                     'userIdentifierSource' => 'FIRST_PARTY',
@@ -559,7 +562,7 @@ class Woo_Gads_Api
                 );
             }
 
-            $phone = $order->get_billing_phone();
+            $phone = method_exists($order, 'get_billing_phone') ? $order->get_billing_phone() : '';
             if (!empty($phone)) {
                 $clean_phone = ltrim(trim($phone), '+');
                 $user_identifier[] = array(
@@ -568,8 +571,8 @@ class Woo_Gads_Api
                 );
             }
 
-            $first_name = $order->get_billing_first_name();
-            $last_name = $order->get_billing_last_name();
+            $first_name = method_exists($order, 'get_billing_first_name') ? $order->get_billing_first_name() : '';
+            $last_name = method_exists($order, 'get_billing_last_name') ? $order->get_billing_last_name() : '';
 
             if (!empty($first_name) && !empty($last_name)) {
                 $address = array(
@@ -577,8 +580,8 @@ class Woo_Gads_Api
                     'hashedLastName' => hash('sha256', strtolower(trim($last_name))),
                 );
 
-                $country = $order->get_billing_country();
-                $zip = $order->get_billing_postcode();
+                $country = method_exists($order, 'get_billing_country') ? $order->get_billing_country() : '';
+                $zip = method_exists($order, 'get_billing_postcode') ? $order->get_billing_postcode() : '';
 
                 if (!empty($country) && !empty($zip)) {
                     $address['countryCode'] = $country;

@@ -188,16 +188,33 @@ $logs = Woo_Gads_Db::get_logs(50);
             </thead>
             <tbody>
                 <?php
-                $recent_orders = wc_get_orders(array(
-                    'limit' => 5,
+                $raw_orders = wc_get_orders(array(
+                    'limit'   => 15,
                     'orderby' => 'date',
-                    'order' => 'DESC',
+                    'order'   => 'DESC',
+                    'type'    => 'shop_order',
                 ));
+
+                $recent_orders = array();
+                if (!empty($raw_orders) && is_array($raw_orders)) {
+                    foreach ($raw_orders as $raw_order) {
+                        if (is_a($raw_order, 'WC_Order') && !is_a($raw_order, 'WC_Order_Refund')) {
+                            $recent_orders[] = $raw_order;
+                            if (count($recent_orders) >= 5) {
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 if (empty($recent_orders)) {
                     echo '<tr><td colspan="6">Aucune commande trouvée.</td></tr>';
                 } else {
                     foreach ($recent_orders as $order) {
+                        if (!is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
+                            continue;
+                        }
+
                         $order_id = $order->get_id();
 
                         // HPOS-compatible meta reading with postmeta fallback
@@ -230,10 +247,10 @@ $logs = Woo_Gads_Db::get_logs(50);
                             } elseif (!empty($api_sent)) {
                                 $api_status = 'Erreur (Legacy)';
                             } else {
-                                $current_order_status = $order->get_status();
+                                $current_order_status = method_exists($order, 'get_status') ? $order->get_status() : '';
                                 $target_statuses = Woo_Gads_Api::get_target_statuses($settings ?? array());
                                 if (!in_array($current_order_status, $target_statuses, true)) {
-                                    $status_name = wc_get_order_status_name($current_order_status);
+                                    $status_name = function_exists('wc_get_order_status_name') ? wc_get_order_status_name($current_order_status) : $current_order_status;
                                     $api_status = 'En attente (Statut « ' . $status_name . ' » non coché)';
                                 } else {
                                     $api_status = 'En attente (Non déclenché)';
@@ -262,19 +279,25 @@ $logs = Woo_Gads_Db::get_logs(50);
                         }
 
                         // Customer Data
-                        $email = $order->get_billing_email();
-                        $phone = $order->get_billing_phone();
+                        $email = method_exists($order, 'get_billing_email') ? $order->get_billing_email() : '';
+                        $phone = method_exists($order, 'get_billing_phone') ? $order->get_billing_phone() : '';
                         $has_data = (!empty($email) && !empty($phone));
+
+                        $date_obj = method_exists($order, 'get_date_created') ? $order->get_date_created() : null;
+                        $formatted_date = ($date_obj && method_exists($date_obj, 'date')) ? $date_obj->date('d/m/Y H:i') : '';
+
+                        $order_status = method_exists($order, 'get_status') ? $order->get_status() : '';
+                        $status_class = 'order-status status-' . esc_attr($order_status);
+                        $status_name  = function_exists('wc_get_order_status_name') ? wc_get_order_status_name($order_status) : $order_status;
                         ?>
                         <tr>
                             <td>
                                 <strong>#<?php echo esc_html($order_id); ?></strong><br>
-                                <small><?php echo esc_html($order->get_date_created()->date('d/m/Y H:i')); ?></small>
+                                <small><?php echo esc_html($formatted_date); ?></small>
                             </td>
                             <td>
                                 <?php 
-                                $status_class = 'order-status status-' . esc_attr($order->get_status());
-                                echo '<mark class="' . $status_class . '" style="background:transparent;"><span>' . esc_html(wc_get_order_status_name($order->get_status())) . '</span></mark>'; 
+                                echo '<mark class="' . $status_class . '" style="background:transparent;"><span>' . esc_html($status_name) . '</span></mark>'; 
                                 ?>
                             </td>
                             <td>

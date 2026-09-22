@@ -94,8 +94,8 @@ class Woo_Gads_Admin
         }
 
         $order = wc_get_order($order_id);
-        if (!$order) {
-            wp_send_json_error('Commande introuvable.');
+        if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
+            wp_send_json_error('Commande introuvable ou type non supporté (les remboursements ne peuvent pas être renvoyés).');
         }
 
         // We reset the sent meta so it can be sent again

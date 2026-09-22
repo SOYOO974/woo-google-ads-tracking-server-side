@@ -228,7 +228,7 @@ class Woo_Gads_Public
     public function save_click_ids($order_id_or_order, $data = null)
     {
         $order = ($order_id_or_order instanceof WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
-        if (!$order) {
+        if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
             return;
         }
 

@@ -48,7 +48,13 @@ class Woo_Gads
     {
         $plugin_public = new Woo_Gads_Public($this->get_plugin_name(), $this->get_version());
 
+        // Google Consent Mode v2 early initialization at Priority 1 in wp_head
+        $this->loader->add_action('wp_head', $plugin_public, 'inject_consent_mode_default', 1);
+
         $this->loader->add_action('wp_enqueue_scripts', $plugin_public, 'enqueue_scripts');
+
+        // Shortcode registration on init
+        $this->loader->add_action('init', $plugin_public, 'register_shortcodes');
 
         // Capture click IDs and consent across all checkout modes (Classic Shortcode, Blocks Store API, Processed, New Order)
         $this->loader->add_action('woocommerce_checkout_update_order_meta', $plugin_public, 'save_click_ids', 10, 2);

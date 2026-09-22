@@ -139,4 +139,79 @@ class Woo_Gads_Admin
 
         wp_send_json_success($stats);
     }
+
+    /**
+     * Inspect site elements (widgets, menus, block templates, Elementor) to verify if the revoyure trigger is installed.
+     *
+     * @return array Array with 'detected' (bool) and 'source' (string|null).
+     */
+    public static function check_reopen_link_present()
+    {
+        // 1. Check classic and block widgets
+        $widget_sources = array('widget_block', 'widget_text', 'widget_custom_html');
+        foreach ($widget_sources as $option_key) {
+            $option_val = get_option($option_key);
+            if (is_array($option_val)) {
+                $serialized = serialize($option_val);
+                if (
+                    strpos($serialized, 'woo_gads_cookie_settings') !== false ||
+                    strpos($serialized, 'woo-gads-reopen-consent') !== false ||
+                    strpos($serialized, '#woo-gads-cookies') !== false
+                ) {
+                    return array('detected' => true, 'source' => 'Widget de pied de page / Sidebar');
+                }
+            }
+        }
+
+        // 2. Check navigation menus
+        $nav_menus = wp_get_nav_menus();
+        if (!empty($nav_menus) && is_array($nav_menus)) {
+            foreach ($nav_menus as $menu) {
+                $items = wp_get_nav_menu_items($menu->term_id);
+                if (!empty($items) && is_array($items)) {
+                    foreach ($items as $item) {
+                        $classes = is_array($item->classes) ? implode(' ', $item->classes) : (string)$item->classes;
+                        $url = (string)$item->url;
+                        $title = (string)$item->title;
+                        if (
+                            strpos($classes, 'woo-gads-reopen-consent') !== false ||
+                            strpos($url, '#woo-gads-cookies') !== false ||
+                            strpos($title, 'woo_gads_cookie_settings') !== false
+                        ) {
+                            return array('detected' => true, 'source' => 'Menu : ' . esc_html($menu->name));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Check Block / FSE Template Parts (WP 5.9+)
+        if (function_exists('get_block_templates')) {
+            $templates = get_block_templates(array(), 'wp_template_part');
+            if (!empty($templates) && is_array($templates)) {
+                foreach ($templates as $template) {
+                    if (isset($template->content) && (strpos($template->slug, 'footer') !== false || strpos($template->theme, 'footer') !== false)) {
+                        if (
+                            strpos($template->content, 'woo_gads_cookie_settings') !== false ||
+                            strpos($template->content, 'woo-gads-reopen-consent') !== false ||
+                            strpos($template->content, '#woo-gads-cookies') !== false
+                        ) {
+                            return array('detected' => true, 'source' => 'Modèle FSE : ' . esc_html($template->slug));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Check Elementor templates (if installed)
+        if (post_type_exists('elementor_library')) {
+            global $wpdb;
+            $found = $wpdb->get_var("SELECT ID FROM {$wpdb->posts} WHERE post_type = 'elementor_library' AND (post_content LIKE '%woo_gads_cookie_settings%' OR post_content LIKE '%woo-gads-reopen-consent%' OR post_content LIKE '%#woo-gads-cookies%') AND post_status = 'publish' LIMIT 1");
+            if ($found) {
+                return array('detected' => true, 'source' => 'Modèle Elementor (ID #' . $found . ')');
+            }
+        }
+
+        return array('detected' => false, 'source' => null);
+    }
 }

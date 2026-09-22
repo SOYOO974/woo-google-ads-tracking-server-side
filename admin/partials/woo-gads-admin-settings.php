@@ -142,11 +142,25 @@ $settings = get_option('woo_gads_settings');
                         </div>
                     </div>
 
-                    <p style="margin-bottom: 0;">
+                    <p style="margin-bottom: 12px;">
                         <label for="woo_gads_banner_privacy_url"><strong>Lien Politique de Confidentialité (optionnel) :</strong></label><br>
                         <input type="url" name="woo_gads_settings[banner_privacy_url]" id="woo_gads_banner_privacy_url" value="<?php echo esc_attr($settings['banner_privacy_url'] ?? (function_exists('get_privacy_policy_url') ? get_privacy_policy_url() : '')); ?>" class="regular-text" style="width: 100%; max-width: 450px;" placeholder="https://..." />
                         <span class="description" style="display: block; margin-top: 3px;">Si renseigné, un lien cliquable sera ajouté au message du bandeau.</span>
                     </p>
+
+                    <div style="margin-top: 15px; padding: 12px 16px; background: #ffffff; border: 1px solid #dcdcde; border-radius: 4px; border-left: 4px solid #2271b1;">
+                        <h4 style="margin-top: 0; margin-bottom: 8px; color: #1d2327;">Obligation CNIL : Lien de réouverture (Revoyure dans le Footer)</h4>
+                        <p style="margin-bottom: 10px; font-size: 13px; color: #50575e; line-height: 1.5;">
+                            Conformément aux directives de la CNIL, les internautes doivent pouvoir retirer ou modifier leur consentement à tout moment, aussi facilement qu'ils l'ont donné. Pour préserver votre ergonomie sans imposer de pastille flottante intempestive, intégrez simplement ce shortcode dans votre pied de page (widget texte, bloc FSE, template ou menu) :
+                        </p>
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <code style="font-size: 13px; padding: 6px 12px; background: #f0f0f1; border: 1px solid #cbd5e1; border-radius: 4px; font-weight: 600; font-family: monospace;">[woo_gads_cookie_settings]</code>
+                            <button type="button" class="button button-secondary" onclick="navigator.clipboard.writeText('[woo_gads_cookie_settings]'); this.innerText='Copié !'; var btn=this; setTimeout(function(){btn.innerText='Copier le shortcode';}, 2000);">Copier le shortcode</button>
+                        </div>
+                        <p class="description" style="margin-top: 8px; margin-bottom: 0;">
+                            <strong>Personnalisations :</strong> <code>[woo_gads_cookie_settings text="Gérer mes cookies"]</code> ou création d'un élément de menu avec l'URL <code>#woo-gads-cookies</code> et la classe <code>woo-gads-reopen-consent</code>.
+                        </p>
+                    </div>
                 </div>
             </td>
         </tr>

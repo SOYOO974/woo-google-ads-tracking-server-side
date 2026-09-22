@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.4.4
+Stable tag: 1.5.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,12 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.5.0 =
+* Google Consent Mode v2 Timing & Rigueur (Priorité 1 wp_head) : Injection précoce de `gtag('consent', 'default', ...)` à la priorité 1 dans `<head>`, avant tout tag Google (GTM ou gtag.js), garantissant le respect strict de la séquence officielle Google et éliminant tout risque de condition de course. Définition explicite de l'attribut `data-cfasync="false"` pour prévenir le report intempestif par Cloudflare Rocket Loader.
+* Revoyure CNIL via Shortcode & Déclencheur Universel : Ajout du shortcode `[woo_gads_cookie_settings]` (paramètres personnalisables `text`, `class`, `tag`) permettant aux internautes de rouvrir et modifier leur consentement à tout moment depuis le pied de page (Footer), sans aucune pastille flottante intrusive afin de préserver l'ergonomie. Prise en charge universelle des éléments de menu avec ancre `#woo-gads-cookies` et classe CSS `woo-gads-reopen-consent`.
+* Émission d'Événements Personnalisés Standardisés : Diffusion automatique d'événements JavaScript `CustomEvent` (`woo_gads_consent_updated` et `woo_consent_updated`) sur `window` et `document` lors de l'acceptation ou du refus, permettant l'interopérabilité immédiate et l'activation à chaud d'autres tags (ex: Meta Pixel / CAPI, TikTok) sans rechargement de page.
+* Diagnostic de Conformité CNIL & Détection Automatique : Analyse croisée (serveur PHP sur widgets/menus/FSE/Elementor + scan client en direct sur la page d'accueil) vérifiant la présence effective d'un déclencheur de réouverture dans le footer. Affichage d'un badge de validation vert ou d'un encart d'alerte explicite avec bouton de copie en 1 clic du shortcode.
 
 = 1.4.4 =
 * Correctif ergonomique & UI : Correction du positionnement et de l'alignement vertical des icônes Dashicons dans les boutons d'action de l'administration (bouton du scanner de rattrapage rétroactif et bouton du scanner de cookies). Utilisation d'un conteneur `inline-flex` avec centrage parfait de l'icône et du texte.

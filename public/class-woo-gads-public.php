@@ -12,6 +12,118 @@ class Woo_Gads_Public
         $this->version = $version;
     }
 
+    /**
+     * Inject Google Consent Mode v2 default initialization at Priority 1 in wp_head.
+     * Ensures gtag('consent', 'default', ...) executes synchronously before any Google tags/GTM load.
+     */
+    public function inject_consent_mode_default()
+    {
+        $settings = get_option('woo_gads_settings');
+        $is_builtin = !empty($settings['enable_builtin_banner']);
+        $external_cookie = (isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name'])) ? $settings['consent_cookie_name'] : 'concord_consent';
+        ?>
+<!-- Google Consent Mode v2 (Woo Gads Server-Side) -->
+<script data-cfasync="false" type="text/javascript">
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+
+(function() {
+	var isBuiltin = <?php echo $is_builtin ? 'true' : 'false'; ?>;
+	var externalCookie = <?php echo wp_json_encode($external_cookie); ?>;
+	var isGranted = false;
+
+	function readCookie(name) {
+		var m = document.cookie.match(new RegExp('(^|; )' + name + '=([^;]+)'));
+		return m ? decodeURIComponent(m[2]) : null;
+	}
+
+	if (isBuiltin) {
+		var raw = readCookie('woo_gads_consent');
+		if (raw) {
+			try {
+				var parsed = JSON.parse(raw);
+				if (parsed && parsed.marketing === true) {
+					isGranted = true;
+				}
+			} catch(e) {}
+		}
+	} else {
+		var extVal = readCookie(externalCookie);
+		if (!extVal && externalCookie && externalCookie.indexOf('concord-allow-state-') === 0) {
+			var cookies = document.cookie.split('; ');
+			for (var i = 0; i < cookies.length; i++) {
+				var parts = cookies[i].split('=');
+				if (parts[0].indexOf('concord-allow-state-') === 0) {
+					extVal = decodeURIComponent(parts[1]);
+					break;
+				}
+			}
+		}
+		if (extVal) {
+			if (extVal === 'denied' || extVal === 'false' || extVal === '0') {
+				isGranted = false;
+			} else {
+				try {
+					var parsedExt = JSON.parse(extVal);
+					if (parsedExt && (parsedExt.marketing === false || parsedExt.advertising === false)) {
+						isGranted = false;
+					} else {
+						isGranted = true;
+					}
+				} catch(e) {
+					isGranted = true;
+				}
+			}
+		}
+	}
+
+	var consentState = isGranted ? 'granted' : 'denied';
+	gtag('consent', 'default', {
+		'ad_storage': consentState,
+		'ad_user_data': consentState,
+		'ad_personalization': consentState,
+		'analytics_storage': consentState
+	});
+})();
+</script>
+<!-- End Google Consent Mode v2 -->
+<?php
+    }
+
+    /**
+     * Register [woo_gads_cookie_settings] shortcode for footer / page reopening of consent banner.
+     */
+    public function register_shortcodes()
+    {
+        add_shortcode('woo_gads_cookie_settings', array($this, 'render_cookie_settings_shortcode'));
+    }
+
+    /**
+     * Render the accessible link/button for reopening cookie consent.
+     */
+    public function render_cookie_settings_shortcode($atts = array())
+    {
+        $atts = shortcode_atts(array(
+            'text'  => __('Gestion des cookies', 'woo-gads-server-side'),
+            'class' => '',
+            'tag'   => 'a',
+        ), $atts, 'woo_gads_cookie_settings');
+
+        $tag = in_array(strtolower($atts['tag']), array('a', 'button', 'span'), true) ? strtolower($atts['tag']) : 'a';
+        $extra_classes = !empty($atts['class']) ? ' ' . esc_attr($atts['class']) : '';
+        $href = ($tag === 'a') ? ' href="#woo-gads-cookies"' : '';
+        $role = ($tag === 'a') ? ' role="button"' : '';
+
+        return sprintf(
+            '<%1$s%2$s%3$s class="woo-gads-reopen-consent%4$s" data-woo-gads-reopen="1" style="cursor: pointer;">%5$s</%1$s>',
+            $tag,
+            $href,
+            $role,
+            $extra_classes,
+            esc_html($atts['text'])
+        );
+    }
+
     public function enqueue_scripts()
     {
         wp_register_script($this->plugin_name . '-capture', false);
@@ -78,7 +190,7 @@ class Woo_Gads_Public
 				}
 			});
 
-			// 2. Gestion de la bannière native Google Consent Mode v2
+			// 2. Gestion de la bannière native Google Consent Mode v2 & Revoyure CNIL
 			var bannerConfig = " . wp_json_encode($banner_config) . ";
 			if (!bannerConfig.enabled) return;
 
@@ -90,135 +202,170 @@ class Woo_Gads_Public
 				return match ? decodeURIComponent(match[2]) : null;
 			}
 
-			var savedConsent = getCookie('woo_gads_consent');
-			var consentData = null;
-
-			if (savedConsent) {
+			function dispatchConsentEvents(accepted) {
+				var payload = {
+					accepted: accepted,
+					marketing: accepted,
+					analytics: accepted,
+					source: 'woo_gads'
+				};
 				try {
-					consentData = JSON.parse(savedConsent);
+					window.dispatchEvent(new CustomEvent('woo_gads_consent_updated', { detail: payload }));
+					document.dispatchEvent(new CustomEvent('woo_gads_consent_updated', { detail: payload }));
+					window.dispatchEvent(new CustomEvent('woo_consent_updated', { detail: payload }));
+					document.dispatchEvent(new CustomEvent('woo_consent_updated', { detail: payload }));
 				} catch(e) {}
 			}
 
-			if (consentData) {
-				var isGranted = consentData.marketing === true;
-				var state = isGranted ? 'granted' : 'denied';
-				gtag('consent', 'default', {
-					'ad_storage': state,
-					'ad_user_data': state,
-					'ad_personalization': state,
-					'analytics_storage': state
-				});
+			function setConsent(accepted) {
+				var payload = {
+					marketing: accepted,
+					analytics: accepted,
+					timestamp: new Date().toISOString()
+				};
+				var date = new Date();
+				date.setTime(date.getTime() + (180 * 24 * 60 * 60 * 1000));
+				document.cookie = 'woo_gads_consent=' + encodeURIComponent(JSON.stringify(payload)) + '; expires=' + date.toUTCString() + '; path=/; SameSite=Lax';
+
+				var state = accepted ? 'granted' : 'denied';
 				gtag('consent', 'update', {
 					'ad_storage': state,
 					'ad_user_data': state,
 					'ad_personalization': state,
 					'analytics_storage': state
 				});
-			} else {
-				// Par défaut (ni clic ni refus) : Google Consent Mode est verrouillé en DENIED (anonymisé)
-				gtag('consent', 'default', {
-					'ad_storage': 'denied',
-					'ad_user_data': 'denied',
-					'ad_personalization': 'denied',
-					'analytics_storage': 'denied'
-				});
 
-				document.addEventListener('DOMContentLoaded', function() {
-					if (document.getElementById('woo-gads-banner')) return;
-					if (sessionStorage.getItem('woo_gads_banner_dismissed')) return;
+				dispatchConsentEvents(accepted);
+				closeBanner();
+			}
 
-					var posRules = '@media(min-width:640px){#woo-gads-banner{right:24px;bottom:24px;left:auto;}}';
-					if (bannerConfig.position === 'bottom-left') {
-						posRules = '@media(min-width:640px){#woo-gads-banner{left:24px;bottom:24px;right:auto;}}';
-					} else if (bannerConfig.position === 'bottom-center') {
-						posRules = '@media(min-width:640px){#woo-gads-banner{left:50%;bottom:24px;right:auto;transform:translateX(-50%);}}';
-					}
+			function ensureStyles() {
+				if (document.getElementById('woo-gads-banner-style')) return;
+				var posRules = '@media(min-width:640px){#woo-gads-banner{right:24px;bottom:24px;left:auto;}}';
+				if (bannerConfig.position === 'bottom-left') {
+					posRules = '@media(min-width:640px){#woo-gads-banner{left:24px;bottom:24px;right:auto;}}';
+				} else if (bannerConfig.position === 'bottom-center') {
+					posRules = '@media(min-width:640px){#woo-gads-banner{left:50%;bottom:24px;right:auto;transform:translateX(-50%);}}';
+				}
 
-					var style = document.createElement('style');
-					style.innerHTML = '#woo-gads-banner{position:fixed;bottom:16px;left:16px;right:16px;max-width:440px;background:#ffffff!important;color:#1e293b!important;padding:18px 20px!important;border-radius:14px!important;box-shadow:0 20px 25px -5px rgba(0,0,0,0.1),0 8px 10px -6px rgba(0,0,0,0.1),0 0 0 1px rgba(0,0,0,0.06)!important;border:1px solid #e2e8f0!important;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif!important;font-size:13px!important;line-height:1.5!important;z-index:99999999!important;box-sizing:border-box!important;animation:wooGadsSlideUp 0.3s cubic-bezier(0.16,1,0.3,1) forwards!important;}' +
-						posRules +
-						'@keyframes wooGadsSlideUp{from{opacity:0;margin-bottom:-10px;}to{opacity:1;margin-bottom:0;}}' +
-						'#woo-gads-banner *{box-sizing:border-box!important;}' +
-						'#woo-gads-banner .woo-gads-header{display:flex!important;align-items:center!important;justify-content:space-between!important;margin-bottom:10px!important;}' +
-						'#woo-gads-banner .woo-gads-title-wrap{display:flex!important;align-items:center!important;gap:8px!important;}' +
-						'#woo-gads-banner .woo-gads-icon{width:18px!important;height:18px!important;color:' + bannerConfig.accent_color + '!important;flex-shrink:0!important;}' +
-						'#woo-gads-banner .woo-gads-title{font-size:14px!important;font-weight:700!important;color:#0f172a!important;letter-spacing:-0.01em!important;}' +
-						'#woo-gads-btn-close{background:transparent!important;border:none!important;color:#94a3b8!important;font-size:18px!important;line-height:1!important;cursor:pointer!important;padding:2px 6px!important;margin:-4px -4px 0 0!important;border-radius:4px!important;transition:color 0.15s ease!important;}' +
-						'#woo-gads-btn-close:hover{color:#334155!important;}' +
-						'#woo-gads-banner p.woo-gads-text{margin:0 0 14px 0!important;color:#475569!important;font-size:13px!important;line-height:1.5!important;}' +
-						'#woo-gads-banner a.woo-gads-privacy-link{color:' + bannerConfig.accent_color + '!important;text-decoration:underline!important;font-weight:500!important;margin-left:4px!important;}' +
-						'#woo-gads-banner .woo-gads-buttons{display:flex!important;gap:10px!important;justify-content:flex-end!important;align-items:center!important;}' +
-						'#woo-gads-banner button.woo-gads-btn{cursor:pointer!important;font-size:13px!important;font-weight:600!important;padding:8px 18px!important;border-radius:8px!important;transition:all 0.15s ease!important;text-transform:none!important;letter-spacing:0!important;height:auto!important;line-height:1.4!important;box-shadow:none!important;margin:0!important;}' +
-						'#woo-gads-btn-decline{background:#ffffff!important;color:#475569!important;border:1px solid #cbd5e1!important;}' +
-						'#woo-gads-btn-decline:hover{background:#f8fafc!important;color:#1e293b!important;border-color:#94a3b8!important;}' +
-						'#woo-gads-btn-accept{background:' + bannerConfig.accent_color + '!important;color:' + bannerConfig.accept_text_color + '!important;border:1px solid ' + bannerConfig.accent_color + '!important;box-shadow:0 1px 3px rgba(0,0,0,0.1)!important;}' +
-						'#woo-gads-btn-accept:hover{filter:brightness(1.12)!important;box-shadow:0 4px 10px rgba(0,0,0,0.15)!important;}';
-					document.head.appendChild(style);
+				var style = document.createElement('style');
+				style.id = 'woo-gads-banner-style';
+				style.innerHTML = '#woo-gads-banner{position:fixed;bottom:16px;left:16px;right:16px;max-width:440px;background:#ffffff!important;color:#1e293b!important;padding:18px 20px!important;border-radius:14px!important;box-shadow:0 20px 25px -5px rgba(0,0,0,0.1),0 8px 10px -6px rgba(0,0,0,0.1),0 0 0 1px rgba(0,0,0,0.06)!important;border:1px solid #e2e8f0!important;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif!important;font-size:13px!important;line-height:1.5!important;z-index:99999999!important;box-sizing:border-box!important;transition:opacity 0.25s ease, transform 0.25s ease!important;animation:wooGadsSlideUp 0.3s cubic-bezier(0.16,1,0.3,1) forwards!important;}' +
+					posRules +
+					'@keyframes wooGadsSlideUp{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}' +
+					'#woo-gads-banner *{box-sizing:border-box!important;}' +
+					'#woo-gads-banner .woo-gads-header{display:flex!important;align-items:center!important;justify-content:space-between!important;margin-bottom:10px!important;}' +
+					'#woo-gads-banner .woo-gads-title-wrap{display:flex!important;align-items:center!important;gap:8px!important;}' +
+					'#woo-gads-banner .woo-gads-icon{width:18px!important;height:18px!important;color:' + bannerConfig.accent_color + '!important;flex-shrink:0!important;}' +
+					'#woo-gads-banner .woo-gads-title{font-size:14px!important;font-weight:700!important;color:#0f172a!important;letter-spacing:-0.01em!important;}' +
+					'#woo-gads-btn-close{background:transparent!important;border:none!important;color:#94a3b8!important;font-size:18px!important;line-height:1!important;cursor:pointer!important;padding:2px 6px!important;margin:-4px -4px 0 0!important;border-radius:4px!important;transition:color 0.15s ease!important;}' +
+					'#woo-gads-btn-close:hover{color:#334155!important;}' +
+					'#woo-gads-banner p.woo-gads-text{margin:0 0 14px 0!important;color:#475569!important;font-size:13px!important;line-height:1.5!important;}' +
+					'#woo-gads-banner a.woo-gads-privacy-link{color:' + bannerConfig.accent_color + '!important;text-decoration:underline!important;font-weight:500!important;margin-left:4px!important;}' +
+					'#woo-gads-banner .woo-gads-buttons{display:flex!important;gap:10px!important;justify-content:flex-end!important;align-items:center!important;}' +
+					'#woo-gads-banner button.woo-gads-btn{cursor:pointer!important;font-size:13px!important;font-weight:600!important;padding:8px 18px!important;border-radius:8px!important;transition:all 0.15s ease!important;text-transform:none!important;letter-spacing:0!important;height:auto!important;line-height:1.4!important;box-shadow:none!important;margin:0!important;}' +
+					'#woo-gads-btn-decline{background:#ffffff!important;color:#475569!important;border:1px solid #cbd5e1!important;}' +
+					'#woo-gads-btn-decline:hover{background:#f8fafc!important;color:#1e293b!important;border-color:#94a3b8!important;}' +
+					'#woo-gads-btn-accept{background:' + bannerConfig.accent_color + '!important;color:' + bannerConfig.accept_text_color + '!important;border:1px solid ' + bannerConfig.accent_color + '!important;box-shadow:0 1px 3px rgba(0,0,0,0.1)!important;}' +
+					'#woo-gads-btn-accept:hover{filter:brightness(1.12)!important;box-shadow:0 4px 10px rgba(0,0,0,0.15)!important;}';
+				document.head.appendChild(style);
+			}
 
-					var banner = document.createElement('div');
-					banner.id = 'woo-gads-banner';
+			function createBanner() {
+				var existing = document.getElementById('woo-gads-banner');
+				if (existing) return existing;
+				ensureStyles();
 
-					var privacyHtml = bannerConfig.privacy_url ? ' <a href=\"' + bannerConfig.privacy_url + '\" target=\"_blank\" class=\"woo-gads-privacy-link\">En savoir plus</a>' : '';
+				var banner = document.createElement('div');
+				banner.id = 'woo-gads-banner';
+				banner.setAttribute('role', 'dialog');
+				banner.setAttribute('aria-modal', 'false');
+				banner.setAttribute('aria-label', 'Gestion des cookies');
 
-					var cookieSvg = '<svg class=\"woo-gads-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5\"></path><path d=\"M8.5 8.5v.01\"></path><path d=\"M7.5 15.5v.01\"></path><path d=\"M15.5 15.5v.01\"></path><path d=\"M11.5 12.5v.01\"></path></svg>';
+				var privacyHtml = bannerConfig.privacy_url ? ' <a href=\"' + bannerConfig.privacy_url + '\" target=\"_blank\" class=\"woo-gads-privacy-link\">En savoir plus</a>' : '';
+				var cookieSvg = '<svg class=\"woo-gads-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5\"></path><path d=\"M8.5 8.5v.01\"></path><path d=\"M7.5 15.5v.01\"></path><path d=\"M15.5 15.5v.01\"></path><path d=\"M11.5 12.5v.01\"></path></svg>';
 
-					banner.innerHTML = '<div class=\"woo-gads-header\">' +
-							'<div class=\"woo-gads-title-wrap\">' +
-								cookieSvg +
-								'<span class=\"woo-gads-title\">Gestion des cookies</span>' +
-							'</div>' +
-							'<button type=\"button\" id=\"woo-gads-btn-close\" title=\"Fermer\">&times;</button>' +
+				banner.innerHTML = '<div class=\"woo-gads-header\">' +
+						'<div class=\"woo-gads-title-wrap\">' +
+							cookieSvg +
+							'<span class=\"woo-gads-title\">Gestion des cookies</span>' +
 						'</div>' +
-						'<p class=\"woo-gads-text\">' + bannerConfig.message + privacyHtml + '</p>' +
-						'<div class=\"woo-gads-buttons\">' +
-							'<button type=\"button\" id=\"woo-gads-btn-decline\" class=\"woo-gads-btn\">' + bannerConfig.decline_text + '</button>' +
-							'<button type=\"button\" id=\"woo-gads-btn-accept\" class=\"woo-gads-btn\">' + bannerConfig.accept_text + '</button>' +
-						'</div>';
+						'<button type=\"button\" id=\"woo-gads-btn-close\" aria-label=\"Fermer\" title=\"Fermer\">&times;</button>' +
+					'</div>' +
+					'<p class=\"woo-gads-text\">' + bannerConfig.message + privacyHtml + '</p>' +
+					'<div class=\"woo-gads-buttons\">' +
+						'<button type=\"button\" id=\"woo-gads-btn-decline\" class=\"woo-gads-btn\">' + bannerConfig.decline_text + '</button>' +
+						'<button type=\"button\" id=\"woo-gads-btn-accept\" class=\"woo-gads-btn\">' + bannerConfig.accept_text + '</button>' +
+					'</div>';
 
-					document.body.appendChild(banner);
+				document.body.appendChild(banner);
 
-					function closeBanner() {
-						banner.style.opacity = '0';
-						banner.style.transform = 'translateY(15px)';
-						setTimeout(function() {
-							if (banner.parentNode) banner.parentNode.removeChild(banner);
-						}, 250);
-					}
-
-					function setConsent(accepted) {
-						var payload = {
-							marketing: accepted,
-							analytics: accepted,
-							timestamp: new Date().toISOString()
-						};
-						var date = new Date();
-						date.setTime(date.getTime() + (180 * 24 * 60 * 60 * 1000));
-						document.cookie = 'woo_gads_consent=' + encodeURIComponent(JSON.stringify(payload)) + '; expires=' + date.toUTCString() + '; path=/; SameSite=Lax';
-
-						var state = accepted ? 'granted' : 'denied';
-						gtag('consent', 'update', {
-							'ad_storage': state,
-							'ad_user_data': state,
-							'ad_personalization': state,
-							'analytics_storage': state
-						});
-
-						closeBanner();
-					}
-
-					document.getElementById('woo-gads-btn-accept').addEventListener('click', function() {
-						setConsent(true);
-					});
-
-					document.getElementById('woo-gads-btn-decline').addEventListener('click', function() {
-						setConsent(false);
-					});
-
-					document.getElementById('woo-gads-btn-close').addEventListener('click', function() {
-						sessionStorage.setItem('woo_gads_banner_dismissed', '1');
-						closeBanner();
-					});
+				document.getElementById('woo-gads-btn-accept').addEventListener('click', function() {
+					setConsent(true);
 				});
+
+				document.getElementById('woo-gads-btn-decline').addEventListener('click', function() {
+					setConsent(false);
+				});
+
+				document.getElementById('woo-gads-btn-close').addEventListener('click', function() {
+					try { sessionStorage.setItem('woo_gads_banner_dismissed', '1'); } catch(e) {}
+					closeBanner();
+				});
+
+				return banner;
+			}
+
+			function openBanner() {
+				try { sessionStorage.removeItem('woo_gads_banner_dismissed'); } catch(e) {}
+				var banner = document.getElementById('woo-gads-banner');
+				if (!banner) {
+					banner = createBanner();
+				} else {
+					banner.style.display = 'block';
+					banner.style.opacity = '1';
+					banner.style.transform = 'translateY(0)';
+					banner.style.pointerEvents = 'auto';
+				}
+				var acceptBtn = document.getElementById('woo-gads-btn-accept');
+				if (acceptBtn) acceptBtn.focus();
+			}
+
+			function closeBanner() {
+				var banner = document.getElementById('woo-gads-banner');
+				if (!banner) return;
+				banner.style.opacity = '0';
+				banner.style.transform = 'translateY(15px)';
+				banner.style.pointerEvents = 'none';
+				setTimeout(function() {
+					if (banner.parentNode) banner.parentNode.removeChild(banner);
+				}, 260);
+			}
+
+			window.wooGadsOpenConsentBanner = openBanner;
+			window.wooGadsCloseConsentBanner = closeBanner;
+			window.wooGadsSetConsent = setConsent;
+
+			// Écouteur de clic universel pour la revoyure (shortcode [woo_gads_cookie_settings], lien de menu, classe CSS)
+			document.addEventListener('click', function(e) {
+				var trigger = e.target && e.target.closest ? e.target.closest('.woo-gads-reopen-consent, [data-woo-gads-reopen], a[href=\"#woo-gads-cookies\"]') : null;
+				if (trigger) {
+					e.preventDefault();
+					openBanner();
+				}
+			});
+
+			// Affichage initial automatique si aucun choix n'a été enregistré
+			var savedConsent = getCookie('woo_gads_consent');
+			var isDismissed = false;
+			try { isDismissed = sessionStorage.getItem('woo_gads_banner_dismissed') === '1'; } catch(e) {}
+
+			if (!savedConsent && !isDismissed) {
+				if (document.readyState === 'loading') {
+					document.addEventListener('DOMContentLoaded', openBanner);
+				} else {
+					openBanner();
+				}
 			}
 		})();
 		";

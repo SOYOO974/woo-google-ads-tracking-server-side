@@ -66,6 +66,7 @@ $logs = Woo_Gads_Db::get_logs(50);
             $settings = get_option('woo_gads_settings');
             $is_builtin = !empty($settings['enable_builtin_banner']);
             $consent_cookie_name = $is_builtin ? 'woo_gads_consent' : (isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent');
+            $reopen_check = Woo_Gads_Admin::check_reopen_link_present();
             ?>
             <?php if ($is_builtin) : ?>
                 <p><strong>Mode de consentement :</strong> <span style="background: #e7f9ed; color: #116633; padding: 2px 8px; border-radius: 3px; font-weight: bold;">Bannière native intégrée (Google Consent Mode v2)</span></p>
@@ -79,6 +80,20 @@ $logs = Woo_Gads_Db::get_logs(50);
                 style="padding: 10px; border-radius: 4px; display: inline-block; font-weight: bold;">
                 Vérification du cookie en cours...
             </div>
+
+            <?php if ($is_builtin) : ?>
+                <div id="woo-gads-reopen-status" style="margin-top: 15px;">
+                    <?php if ($reopen_check['detected']) : ?>
+                        <div style="background: #e7f9ed; color: #116633; border: 1px solid #c3ebce; border-left: 4px solid #00a32a; padding: 10px 14px; border-radius: 4px;">
+                            <strong>✅ Lien de revoyure CNIL actif :</strong> Détecté sur votre site (<em><?php echo esc_html($reopen_check['source']); ?></em>). Vos internautes peuvent modifier ou retirer leur consentement à tout moment.
+                        </div>
+                    <?php else : ?>
+                        <div id="woo-gads-reopen-pending" style="background: #f6f7f7; color: #50575e; border: 1px solid #dcdcde; padding: 10px 14px; border-radius: 4px;">
+                            Vérification de la présence du lien de revoyure CNIL sur la page d'accueil...
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
         </div>
 
         <script type="text/javascript">
@@ -102,6 +117,8 @@ $logs = Woo_Gads_Db::get_logs(50);
 
                 var cookieName = '<?php echo esc_js($consent_cookie_name); ?>';
                 var isBuiltin = <?php echo $is_builtin ? 'true' : 'false'; ?>;
+                var phpDetected = <?php echo ($is_builtin && $reopen_check['detected']) ? 'true' : 'false'; ?>;
+                var phpSource = <?php echo wp_json_encode($reopen_check['source'] ?? ''); ?>;
                 var statusDiv = $('#woo-gads-cookie-status');
                 var value = getCookie(cookieName);
                 var homeUrl = '<?php echo esc_url(home_url('/')); ?>';
@@ -140,6 +157,37 @@ $logs = Woo_Gads_Db::get_logs(50);
                                         .css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf', 'display': 'inline-block', 'max-width': '100%' });
                                 }
                             }
+
+                            // Vérification du déclencheur de revoyure dans le HTML
+                            var htmlReopen = (
+                                html.indexOf('woo-gads-reopen-consent') !== -1 ||
+                                html.indexOf('data-woo-gads-reopen') !== -1 ||
+                                html.indexOf('woo_gads_cookie_settings') !== -1 ||
+                                html.indexOf('#woo-gads-cookies') !== -1
+                            );
+
+                            var $reopenDiv = $('#woo-gads-reopen-status');
+                            if (phpDetected || htmlReopen) {
+                                var loc = phpDetected ? (' (' + phpSource + ')') : ' (Détecté dans le code HTML de votre page d\'accueil)';
+                                $reopenDiv.html('<div style=\"background: #e7f9ed; color: #116633; border: 1px solid #c3ebce; border-left: 4px solid #00a32a; padding: 10px 14px; border-radius: 4px;\">' +
+                                    '<strong>✅ Lien de revoyure CNIL actif :</strong> Détecté sur votre site' + loc + '. Vos internautes peuvent modifier ou retirer leur consentement à tout moment.' +
+                                '</div>');
+                            } else {
+                                $reopenDiv.html('<div style=\"background: #fff8e5; color: #8a4800; border: 1px solid #ffebc2; border-left: 4px solid #dba617; padding: 14px 16px; border-radius: 4px;\">' +
+                                    '<div style=\"display:flex; align-items:center; gap:8px; margin-bottom:6px;\">' +
+                                        '<span class=\"dashicons dashicons-warning\" style=\"font-size:20px; width:20px; height:20px; color:#dba617;\"></span>' +
+                                        '<strong style=\"font-size:14px; color:#8a4800;\">Alerte CNIL : Aucun lien de revoyure / réouverture détecté dans le pied de page</strong>' +
+                                    '</div>' +
+                                    '<p style=\"margin:0 0 10px 0; font-size:13px; color:#50575e; line-height:1.5;\">' +
+                                        'Pour respecter la directive CNIL sans polluer votre interface avec un badge flottant, vous devez permettre aux visiteurs de modifier leur choix à tout moment depuis le pied de page (Footer).' +
+                                    '</p>' +
+                                    '<div style=\"display:flex; align-items:center; gap:10px; flex-wrap:wrap;\">' +
+                                        '<code style=\"font-size:13px; padding:6px 10px; background:#fff; border:1px solid #cbd5e1; border-radius:4px; font-weight:600; font-family:monospace;\">[woo_gads_cookie_settings]</code>' +
+                                        '<button type=\"button\" class=\"button button-secondary button-small\" onclick=\"navigator.clipboard.writeText(\'[woo_gads_cookie_settings]\'); this.innerText=\'Copié !\'; var btn=this; setTimeout(function(){btn.innerText=\'Copier le shortcode\';}, 2000);\">Copier le shortcode</button>' +
+                                        '<span style=\"font-size:12px; color:#646970;\">À coller dans un widget texte ou menu de votre footer (ou lien avec URL <code>#woo-gads-cookies</code>).</span>' +
+                                    '</div>' +
+                                '</div>');
+                            }
                         } else {
                             var hasConcordScript = html.toLowerCase().indexOf('concord') !== -1;
                             
@@ -169,6 +217,30 @@ $logs = Woo_Gads_Db::get_logs(50);
                         } else {
                             statusDiv.html('<strong>Pastille rouge :</strong> Cookie introuvable sur ce domaine. Vérifiez votre installation.')
                                 .css({ 'background': '#fbeaea', 'color': '#9b2626', 'border': '1px solid #f2cfcf', 'display': 'inline-block' });
+                        }
+
+                        if (isBuiltin) {
+                            var $reopenDiv = $('#woo-gads-reopen-status');
+                            if (phpDetected) {
+                                $reopenDiv.html('<div style=\"background: #e7f9ed; color: #116633; border: 1px solid #c3ebce; border-left: 4px solid #00a32a; padding: 10px 14px; border-radius: 4px;\">' +
+                                    '<strong>✅ Lien de revoyure CNIL actif :</strong> Détecté sur votre site (' + phpSource + ').' +
+                                '</div>');
+                            } else {
+                                $reopenDiv.html('<div style=\"background: #fff8e5; color: #8a4800; border: 1px solid #ffebc2; border-left: 4px solid #dba617; padding: 14px 16px; border-radius: 4px;\">' +
+                                    '<div style=\"display:flex; align-items:center; gap:8px; margin-bottom:6px;\">' +
+                                        '<span class=\"dashicons dashicons-warning\" style=\"font-size:20px; width:20px; height:20px; color:#dba617;\"></span>' +
+                                        '<strong style=\"font-size:14px; color:#8a4800;\">Alerte CNIL : Aucun lien de revoyure / réouverture détecté dans le pied de page</strong>' +
+                                    '</div>' +
+                                    '<p style=\"margin:0 0 10px 0; font-size:13px; color:#50575e; line-height:1.5;\">' +
+                                        'Pour respecter la directive CNIL sans polluer votre interface avec un badge flottant, vous devez permettre aux visiteurs de modifier leur choix à tout moment depuis le pied de page (Footer).' +
+                                    '</p>' +
+                                    '<div style=\"display:flex; align-items:center; gap:10px; flex-wrap:wrap;\">' +
+                                        '<code style=\"font-size:13px; padding:6px 10px; background:#fff; border:1px solid #cbd5e1; border-radius:4px; font-weight:600; font-family:monospace;\">[woo_gads_cookie_settings]</code>' +
+                                        '<button type=\"button\" class=\"button button-secondary button-small\" onclick=\"navigator.clipboard.writeText(\'[woo_gads_cookie_settings]\'); this.innerText=\'Copié !\'; var btn=this; setTimeout(function(){btn.innerText=\'Copier le shortcode\';}, 2000);\">Copier le shortcode</button>' +
+                                        '<span style=\"font-size:12px; color:#646970;\">À coller dans un widget texte ou menu de votre footer (ou lien avec URL <code>#woo-gads-cookies</code>).</span>' +
+                                    '</div>' +
+                                '</div>');
+                            }
                         }
                     });
             })(jQuery);

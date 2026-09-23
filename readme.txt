@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.5.0
+Stable tag: 1.5.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.5.1 =
+* Intégration native Woodmart : Injection automatique du lien de revoyure CNIL (`[woo_gads_cookie_settings]`) dans le copyright du pied de page du thème Woodmart via le filtre `woodmart_option`, sans configuration manuelle requise.
+* Styles optimisés du déclencheur : Injection de styles CSS dédiés (`print_reopen_consent_styles`) à la priorité 99 dans `wp_head` assurant une intégration harmonieuse, un curseur pointeur accessible, un soulignement net et un survol adapté à la charte Woodmart (`.wd-copyrights`).
+* Scanner CNIL étendu dans l'administration : Détection automatique multicouche de la conformité CNIL pour les sites Woodmart (inspection des Theme Settings `copyrights`/`copyrights2`, détection dans les blocs HTML Woodmart `cms_block` et validation de l'injection active par filtre).
 
 = 1.5.0 =
 * Google Consent Mode v2 Timing & Rigueur (Priorité 1 wp_head) : Injection précoce de `gtag('consent', 'default', ...)` à la priorité 1 dans `<head>`, avant tout tag Google (GTM ou gtag.js), garantissant le respect strict de la séquence officielle Google et éliminant tout risque de condition de course. Définition explicite de l'attribut `data-cfasync="false"` pour prévenir le report intempestif par Cloudflare Rocket Loader.

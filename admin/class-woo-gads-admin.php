@@ -212,6 +212,54 @@ class Woo_Gads_Admin
             }
         }
 
+        // 5. Check Woodmart theme settings (Theme Settings > Copyrights)
+        $woodmart_options = get_option('xts-woodmart-options');
+        if (is_array($woodmart_options)) {
+            $copyright_fields = array('copyrights', 'copyrights2');
+            foreach ($copyright_fields as $field) {
+                if (!empty($woodmart_options[$field]) && is_string($woodmart_options[$field])) {
+                    $content = $woodmart_options[$field];
+                    if (
+                        strpos($content, 'woo_gads_cookie_settings') !== false ||
+                        strpos($content, 'woo-gads-reopen-consent') !== false ||
+                        strpos($content, '#woo-gads-cookies') !== false
+                    ) {
+                        return array('detected' => true, 'source' => 'Pied de page Woodmart (Theme Settings > Copyrights)');
+                    }
+                }
+            }
+        }
+
+        // 6. Check Woodmart HTML Blocks (cms_block post type)
+        if (post_type_exists('cms_block')) {
+            global $wpdb;
+            $found_block = $wpdb->get_var("SELECT ID FROM {$wpdb->posts} WHERE post_type = 'cms_block' AND (post_content LIKE '%woo_gads_cookie_settings%' OR post_content LIKE '%woo-gads-reopen-consent%' OR post_content LIKE '%#woo-gads-cookies%') AND post_status = 'publish' LIMIT 1");
+            if ($found_block) {
+                return array('detected' => true, 'source' => 'Bloc HTML Woodmart (ID #' . $found_block . ')');
+            }
+        }
+
+        // 7. Check if Woodmart active filter injects the reopen link
+        if (function_exists('woodmart_get_opt')) {
+            if (class_exists('Woo_Gads_Public')) {
+                Woo_Gads_Public::$in_scanner_check = true;
+            }
+            $copyrights_val = woodmart_get_opt('copyrights');
+            if (class_exists('Woo_Gads_Public')) {
+                Woo_Gads_Public::$in_scanner_check = false;
+            }
+
+            if (
+                is_string($copyrights_val) && (
+                    strpos($copyrights_val, 'woo_gads_cookie_settings') !== false ||
+                    strpos($copyrights_val, 'woo-gads-reopen-consent') !== false ||
+                    strpos($copyrights_val, '#woo-gads-cookies') !== false
+                )
+            ) {
+                return array('detected' => true, 'source' => 'Pied de page Woodmart (Filtre actif)');
+            }
+        }
+
         return array('detected' => false, 'source' => null);
     }
 }

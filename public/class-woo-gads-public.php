@@ -6,6 +6,13 @@ class Woo_Gads_Public
     private $plugin_name;
     private $version;
 
+    /**
+     * Flag to allow filter evaluation during admin scanner checks.
+     *
+     * @var bool
+     */
+    public static $in_scanner_check = false;
+
     public function __construct($plugin_name, $version)
     {
         $this->plugin_name = $plugin_name;
@@ -122,6 +129,42 @@ function gtag(){dataLayer.push(arguments);}
             $extra_classes,
             esc_html($atts['text'])
         );
+    }
+
+    /**
+     * Filter Woodmart theme copyright option to automatically inject the CNIL consent reopening link if missing.
+     *
+     * @param mixed  $opt  Option value.
+     * @param string $slug Option slug.
+     * @return mixed
+     */
+    public function filter_woodmart_copyrights($opt, $slug)
+    {
+        if ($slug === 'copyrights' && !empty($opt) && (!is_admin() || self::$in_scanner_check)) {
+            if (
+                strpos($opt, 'woo_gads_cookie_settings') === false &&
+                strpos($opt, 'woo-gads-reopen-consent') === false &&
+                strpos($opt, '#woo-gads-cookies') === false
+            ) {
+                $opt .= ' <span class="confo-footer-sep" style="margin: 0 8px; opacity: 0.5;">•</span> [woo_gads_cookie_settings text="' . esc_attr__('Gérer mes cookies', 'woo-gads-server-side') . '"]';
+            }
+        }
+
+        return $opt;
+    }
+
+    /**
+     * Print CSS styles for the consent reopening trigger.
+     */
+    public function print_reopen_consent_styles()
+    {
+        ?>
+<style id="woo-gads-reopen-consent-css">
+a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; transition: color 0.2s ease, opacity 0.2s ease; }
+.wd-copyrights a.woo-gads-reopen-consent { color: inherit; }
+.wd-copyrights a.woo-gads-reopen-consent:hover { color: #DB3832; opacity: 1; }
+</style>
+<?php
     }
 
     public function enqueue_scripts()

@@ -51,6 +51,12 @@ class Woo_Gads
         // Google Consent Mode v2 early initialization at Priority 1 in wp_head
         $this->loader->add_action('wp_head', $plugin_public, 'inject_consent_mode_default', 1);
 
+        // CSS styles for reopen consent trigger in wp_head
+        $this->loader->add_action('wp_head', $plugin_public, 'print_reopen_consent_styles', 99);
+
+        // Automatic CNIL reopen trigger injection for Woodmart theme footer copyrights
+        $this->loader->add_filter('woodmart_option', $plugin_public, 'filter_woodmart_copyrights', 20, 2);
+
         $this->loader->add_action('wp_enqueue_scripts', $plugin_public, 'enqueue_scripts');
 
         // Shortcode registration on init

@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.5.1
+Stable tag: 1.5.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.5.2 =
+* Correctif décodage consentement HPOS : Prise en charge stricte de `stripslashes()` lors de la lecture et de la persistance de `_woo_gads_consent`. Résout un problème où les guillemets échappés en base empêchaient `json_decode()` de lire le consentement marketing, entraînant un envoi erroné en `DENIED` et supprimant les données client des conversions améliorées (Enhanced Conversions).
+* Détection et gestion des échecs partiels Google Ads API (`partialFailureError`) : Analyse rigoureuse du corps de réponse lorsque l'API Google Ads retourne HTTP 200 avec `'partialFailure' => true`. Extraction automatique des détails d'erreur (`errors[].message`), mise à jour du statut de la commande en `Échec partiel`, journalisation détaillée dans la table de logs et diffusion immédiate d'une alerte email administrateur pour éliminer tout faux positif dans le backoffice.
+* Guide contextuel des conditions relatives aux données client : Ajout d'une notice explicative dans l'onglet Réglages précisant la nécessité de valider les conditions de traitement des données client (« Configurer l'importation ») dans Google Ads afin d'autoriser l'API à rattacher les conversions améliorées.
 
 = 1.5.1 =
 * Intégration native Woodmart : Injection automatique du lien de revoyure CNIL (`[woo_gads_cookie_settings]`) dans le copyright du pied de page du thème Woodmart via le filtre `woodmart_option`, sans configuration manuelle requise.

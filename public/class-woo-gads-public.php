@@ -470,9 +470,9 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
         }
 
         if ($cookie_value !== null) {
-            $decoded_val = urldecode($cookie_value);
-            $order->update_meta_data('_woo_gads_consent', sanitize_text_field($decoded_val));
-            update_post_meta($order_id, '_woo_gads_consent', sanitize_text_field($decoded_val));
+            $clean_val = stripslashes(urldecode($cookie_value));
+            $order->update_meta_data('_woo_gads_consent', $clean_val);
+            update_post_meta($order_id, '_woo_gads_consent', $clean_val);
         } else {
             $order->update_meta_data('_woo_gads_consent', 'no_cookie_found');
             update_post_meta($order_id, '_woo_gads_consent', 'no_cookie_found');

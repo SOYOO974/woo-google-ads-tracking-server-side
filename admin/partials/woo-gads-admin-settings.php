@@ -41,6 +41,9 @@ $settings = get_option('woo_gads_settings');
                     placeholder="ex: 123456" />
                 <a href="https://ads.google.com/aw/conversions" target="_blank" class="button button-small"
                     style="margin-left:5px;">Voir les Conversions</a>
+                <p class="description" style="margin-top: 5px;">
+                    <strong>Important :</strong> Dans Google Ads (<em>Objectifs &gt; Conversions</em>), l'action doit être de type <strong>« Importer à partir des clics »</strong>. Si un bouton bleu <strong>« Configurer l'importation »</strong> apparaît dans la colonne <em>Actions</em> avec l'état <em>« Attention requise »</em>, cliquez impérativement dessus pour finaliser la connexion (sélectionnez <em>« Importer via l'API ou des fichiers »</em>) afin que Google Ads débloque l'attribution des ventes.
+                </p>
             </td>
         </tr>
         <tr>

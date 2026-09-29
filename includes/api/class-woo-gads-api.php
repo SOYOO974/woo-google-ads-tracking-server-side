@@ -352,12 +352,16 @@ class Woo_Gads_Api
                 $meta_cookie = get_post_meta($order_id, '_concord_consent', true);
             }
             if ($meta_cookie && $meta_cookie !== 'no_cookie_found') {
-                $cookie_value = urldecode(html_entity_decode($meta_cookie, ENT_QUOTES)); // Decode if sanitized as text field
+                $cookie_value = stripslashes(urldecode(html_entity_decode($meta_cookie, ENT_QUOTES))); // Strip slashes and decode if sanitized as text field
             }
         }
 
         if ($cookie_value) {
-            $cookie_data = json_decode($cookie_value, true);
+            $clean_json = stripslashes($cookie_value);
+            $cookie_data = json_decode($clean_json, true);
+            if (!is_array($cookie_data)) {
+                $cookie_data = json_decode(stripslashes(html_entity_decode($cookie_value, ENT_QUOTES)), true);
+            }
             if (is_array($cookie_data) && isset($cookie_data['marketing']) && $cookie_data['marketing'] === true) {
                 $marketing_consent = true;
             }
@@ -366,7 +370,7 @@ class Woo_Gads_Api
         $consent_log_msg = '';
         if ($marketing_consent) {
             $consent_log_msg = 'Envoi avec données clients (GRANTED)';
-        } elseif ($cookie_value) {
+        } elseif ($cookie_value && $cookie_value !== 'no_cookie_found') {
             $consent_log_msg = 'Envoi anonymisé (DENIED - Refusé par l\'utilisateur)';
         } else {
             $consent_log_msg = $is_builtin ? 'Envoi anonymisé (DENIED - Sans choix visiteur / Par défaut)' : 'Envoi anonymisé (DENIED - Cookie absent)';
@@ -457,10 +461,38 @@ class Woo_Gads_Api
             $this->check_consecutive_missing_cookies();
             return array('success' => false, 'status' => 'http_error', 'message' => $error_message);
         } else {
-            // Success or logical failure
-            $error_col = ($http_status != 200) ? 'Erreur API' : '';
-            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, json_decode($body, true), $consent_log_msg . ($error_col ? ' | ' . $error_col : ''));
-            if ($http_status == 200) {
+            $body_decoded = !empty($body) ? json_decode($body, true) : null;
+            $has_partial_failure = ($http_status == 200 && is_array($body_decoded) && !empty($body_decoded['partialFailureError']));
+
+            if ($has_partial_failure) {
+                $pf_error = $body_decoded['partialFailureError'];
+                $pf_msg = isset($pf_error['message']) ? $pf_error['message'] : 'Erreur de conversion partielle';
+                if (!empty($pf_error['details']) && is_array($pf_error['details'])) {
+                    foreach ($pf_error['details'] as $detail) {
+                        if (!empty($detail['errors']) && is_array($detail['errors'])) {
+                            foreach ($detail['errors'] as $err) {
+                                if (!empty($err['message'])) {
+                                    $pf_msg .= ' | ' . $err['message'];
+                                }
+                            }
+                        }
+                    }
+                }
+
+                $error_log_msg = $consent_log_msg . ' | Échec partiel : ' . $pf_msg;
+                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $error_log_msg);
+
+                $order->update_meta_data('_gads_api_sent', 'Failed Partial: ' . substr($pf_msg, 0, 100));
+                $order->update_meta_data('_gads_api_status', 'Échec partiel - ' . substr($pf_msg, 0, 150));
+                $order->save();
+                update_post_meta($order_id, '_gads_api_sent', 'Failed Partial: ' . substr($pf_msg, 0, 100));
+                update_post_meta($order_id, '_gads_api_status', 'Échec partiel - ' . substr($pf_msg, 0, 150));
+
+                $this->send_error_email($order_id, 'Échec partiel Google Ads (HTTP 200 avec partialFailureError) : ' . $pf_msg);
+                $this->check_consecutive_missing_cookies();
+                return array('success' => false, 'status' => 'partial_failure_error', 'message' => $pf_msg);
+            } elseif ($http_status == 200) {
+                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $consent_log_msg);
                 $order->update_meta_data('_gads_api_sent', '1');
                 $order->update_meta_data('_gads_api_status', 'Succès');
                 $order->save();
@@ -474,7 +506,6 @@ class Woo_Gads_Api
                 
                 $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
                 if (!empty($body)) {
-                    $body_decoded = json_decode($body, true);
                     if ($body_decoded && isset($body_decoded['error'])) {
                         if (isset($body_decoded['error']['message'])) {
                             $error_details .= ' Message : ' . $body_decoded['error']['message'];
@@ -496,6 +527,7 @@ class Woo_Gads_Api
                     }
                 }
                 
+                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $consent_log_msg . ' | Erreur API');
                 $order->update_meta_data('_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
                 $order->save();
                 update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);

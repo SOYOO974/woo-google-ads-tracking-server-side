@@ -42,7 +42,7 @@ $settings = get_option('woo_gads_settings');
                 <a href="https://ads.google.com/aw/conversions" target="_blank" class="button button-small"
                     style="margin-left:5px;">Voir les Conversions</a>
                 <p class="description" style="margin-top: 5px;">
-                    <strong>Important :</strong> Dans Google Ads (<em>Objectifs &gt; Conversions</em>), l'action doit être de type <strong>« Importer à partir des clics »</strong>. Si un bouton bleu <strong>« Configurer l'importation »</strong> apparaît dans la colonne <em>Actions</em> avec l'état <em>« Attention requise »</em>, cliquez impérativement dessus pour finaliser la connexion (sélectionnez <em>« Importer via l'API ou des fichiers »</em>) afin que Google Ads débloque l'attribution des ventes.
+                    <strong>Important (Conditions relatives aux données client) :</strong> Pour autoriser Google Ads à traiter les conversions améliorées (Enhanced Conversions avec email/téléphone), rendez-vous dans Google Ads dans le menu latéral gauche : <em>Objectifs &gt; Conversions &gt; Paramètres des conversions</em>, déroulez la section <strong>« Conditions relatives au traitement des données client »</strong>, cochez la case d'acceptation et enregistrez. <em>(Attention : ne pas cliquer sur « Connecter une source de données » sur l'action de conversion, qui lance un assistant d'importation de fichiers manuels).</em> En cas de conditions non encore acceptées, le plugin assure un repli automatique transparent sur le Click ID seul (GCLID) pour qu'aucune vente ne soit perdue.
                 </p>
             </td>
         </tr>

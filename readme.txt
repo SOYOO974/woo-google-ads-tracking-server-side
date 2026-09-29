@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.5.2
+Stable tag: 1.5.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,10 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.5.3 =
+* Repli automatique résilient sur le Click ID (GCLID/WBRAID/GBRAID) : Si Google Ads renvoie l'erreur `CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS` (lorsque les conditions relatives aux données client ne sont pas encore validées ou en cours de propagation dans le compte Google Ads), le plugin relance immédiatement et automatiquement la transmission sans les données client. La conversion est instantanément enregistrée et attribuée dans Google Ads sans aucune perte de chiffre d'affaires.
+* Guidage contextuel de configuration : Clarification dans l'administration du chemin exact pour accepter les conditions de données client (*Objectifs > Conversions > Paramètres des conversions* dans le menu latéral gauche, et non via l'assistant d'import de fichiers).
 
 = 1.5.2 =
 * Correctif décodage consentement HPOS : Prise en charge stricte de `stripslashes()` lors de la lecture et de la persistance de `_woo_gads_consent`. Résout un problème où les guillemets échappés en base empêchaient `json_decode()` de lire le consentement marketing, entraînant un envoi erroné en `DENIED` et supprimant les données client des conversions améliorées (Enhanced Conversions).

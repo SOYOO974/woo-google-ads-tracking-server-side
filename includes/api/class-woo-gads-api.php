@@ -479,6 +479,43 @@ class Woo_Gads_Api
                     }
                 }
 
+                // Filet de sécurité résilient : Si Google Ads refuse les identifiants utilisateur car les conditions de données client
+                // ne sont pas encore acceptées dans le compte, repli immédiat sur le Click ID seul (GCLID/WBRAID/GBRAID) pour ne perdre AUCUNE conversion.
+                $is_terms_error = (stripos($pf_msg, 'CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS') !== false || stripos($pf_msg, 'customer data processing terms') !== false);
+                if ($is_terms_error && !empty($payload['conversions'][0]['userIdentifiers'])) {
+                    $fallback_payload = $payload;
+                    unset($fallback_payload['conversions'][0]['userIdentifiers']);
+
+                    $fb_response = wp_remote_post($url, array(
+                        'method'  => 'POST',
+                        'headers' => $headers,
+                        'body'    => json_encode($fallback_payload),
+                        'timeout' => 20,
+                    ));
+
+                    if (!is_wp_error($fb_response)) {
+                        $fb_http_status = wp_remote_retrieve_response_code($fb_response);
+                        $fb_body = wp_remote_retrieve_body($fb_response);
+                        $fb_body_decoded = !empty($fb_body) ? json_decode($fb_body, true) : null;
+                        $fb_has_partial = ($fb_http_status == 200 && is_array($fb_body_decoded) && !empty($fb_body_decoded['partialFailureError']));
+
+                        if ($fb_http_status == 200 && !$fb_has_partial) {
+                            $fb_log_msg = $consent_log_msg . ' | Succès (Repli Click ID seul - Conditions données client non validées)';
+                            Woo_Gads_Db::insert_log($order_id, $fb_http_status, $fallback_payload, $fb_body_decoded, $fb_log_msg);
+
+                            $order->update_meta_data('_gads_api_sent', '1');
+                            $order->update_meta_data('_gads_api_status', 'Succès (Repli Click ID seul)');
+                            $order->save();
+                            update_post_meta($order_id, '_gads_api_sent', '1');
+                            update_post_meta($order_id, '_gads_api_status', 'Succès (Repli Click ID seul)');
+
+                            $this->send_error_email($order_id, 'Alerte Google Ads : La commande #' . $order_id . ' a été transmise avec succès grâce à son Click ID (GCLID/WBRAID/GBRAID), mais les données client (email, téléphone) ont été rejetées car les Conditions relatives au traitement des données client ne sont pas encore validées dans votre compte Google Ads (Objectifs > Conversions > Paramètres des conversions). Veuillez vous rendre dans Google Ads pour les valider afin d\'activer les conversions améliorées.');
+                            $this->check_consecutive_missing_cookies();
+                            return array('success' => true, 'status' => 'success_click_id_fallback');
+                        }
+                    }
+                }
+
                 $error_log_msg = $consent_log_msg . ' | Échec partiel : ' . $pf_msg;
                 Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $error_log_msg);
 

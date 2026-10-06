@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.5.3
+Stable tag: 1.5.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,12 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.5.4 =
+* Neutralisation des faux positifs sur clics expirés (`CLICK_BEFORE_CONVERSION_CLICK_THROUGH_WINDOW`) : Détection et classification ciblée de l'erreur renvoyée par Google Ads lorsque le clic publicitaire est antérieur à la fenêtre de conversion (par défaut 30 jours dans Google Ads). L'événement est désormais marqué comme résolu (`_gads_api_sent = 1`, statut « Ignoré (Clic expiré - hors fenêtre d'attribution) »), consigné en base sans alarme et n'émet plus aucun e-mail d'alerte intempestif.
+* Mécanisme anti-zombie GCLID & Horodatage strict : Dans le navigateur, les identifiants publicitaires (`gclid`, `wbraid`, `gbraid`) sont désormais sauvegardés en `localStorage` avec leur horodatage exact (`timestamp`). Toute entrée expirée ou issue d'anciennes versions sans horodatage est automatiquement purgée à l'ouverture du site, éliminant la réinjection infinie de vieux clics dans les cookies.
+* Réglage de la fenêtre d'attribution des clics : Ajout d'une option dans l'onglet Réglages permettant de choisir la durée de rétention des cookies et du stockage local (30 jours par défaut, 60 jours ou 90 jours maximum) pour l'aligner parfaitement sur la « Fenêtre de conversion après clic » configurée dans Google Ads.
+* Gestion affinée des retours d'API Google Ads (`partialFailureError`) : Prise en charge transparente des conversions déjà enregistrées (`CLICK_CONVERSION_ALREADY_EXISTS` traitée en Succès) et des clics introuvables (`CLICK_NOT_FOUND` traitée en Ignoré), sans pollution de la boîte e-mail de l'administrateur.
 
 = 1.5.3 =
 * Repli automatique résilient sur le Click ID (GCLID/WBRAID/GBRAID) : Si Google Ads renvoie l'erreur `CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS` (lorsque les conditions relatives aux données client ne sont pas encore validées ou en cours de propagation dans le compte Google Ads), le plugin relance immédiatement et automatiquement la transmission sans les données client. La conversion est instantanément enregistrée et attribuée dans Google Ads sans aucune perte de chiffre d'affaires.

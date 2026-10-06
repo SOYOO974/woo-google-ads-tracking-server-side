@@ -606,6 +606,9 @@ jQuery(document).ready(function ($) {
                 html += '<li><strong>Commandes analysées :</strong> ' + d.total_inspected + '</li>';
                 html += '<li><span style="color:#00a32a;">✅ Déjà envoyées auparavant (inchangées) :</span> ' + d.already_sent + '</li>';
                 html += '<li><span style="color:#2271b1; font-weight:bold;">🚀 Conversions rattrapées & envoyées avec succès :</span> ' + d.rescued_success + '</li>';
+                if (d.skipped_expired > 0) {
+                    html += '<li><span style="color:#646970;">⌛ Clics expirés (hors fenêtre de conversion Google Ads) :</span> ' + d.skipped_expired + '<br><small style="color:#646970; margin-left: 15px;">Clics publicitaires antérieurs à la fenêtre d\'attribution configurée dans Google Ads (marqués comme résolus pour éviter tout renvoi parasite).</small></li>';
+                }
                 if (d.rescued_failed > 0) {
                     html += '<li><span style="color:#d63638; font-weight:bold;">❌ Échecs d\'envoi API :</span> ' + d.rescued_failed + '</li>';
                 }
@@ -638,7 +641,7 @@ jQuery(document).ready(function ($) {
                 if (d.details && d.details.length > 0) {
                     html += '<div style="margin-top: 10px; max-height: 150px; overflow-y: auto; background: #fff; padding: 8px; border: 1px solid #ccd0d4; font-family: monospace; font-size: 11px;">';
                     d.details.forEach(function(item) {
-                        var color = item.status === 'success' ? '#00a32a' : '#d63638';
+                        var color = item.status === 'success' ? '#00a32a' : (item.status === 'ignored' ? '#646970' : '#d63638');
                         html += '<div style="color:' + color + ';">Commande #' + item.order_id + ' : ' + item.message + '</div>';
                     });
                     html += '</div>';

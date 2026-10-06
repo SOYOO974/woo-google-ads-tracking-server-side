@@ -113,8 +113,10 @@ class Woo_Gads_Admin
             $new_status = get_post_meta($order_id, '_gads_api_status', true);
         }
         
-        if ($new_status === 'Succès') {
-            wp_send_json_success('Renvoi réussi');
+        if (strpos($new_status, 'Succès') !== false) {
+            wp_send_json_success($new_status);
+        } elseif (strpos($new_status, 'Ignoré') !== false) {
+            wp_send_json_success($new_status);
         } else {
             wp_send_json_error($new_status ?: 'Statut inconnu');
         }

@@ -172,6 +172,7 @@ class Woo_Gads_Api
             'already_sent' => 0,
             'skipped_no_click_id' => 0,
             'skipped_status' => 0,
+            'skipped_expired' => 0,
             'skipped_statuses_breakdown' => array(),
             'orders_with_click_id_blocked_by_status' => array(),
             'rescued_success' => 0,
@@ -254,18 +255,27 @@ class Woo_Gads_Api
             }
 
             if ($new_sent === '1') {
-                $stats['rescued_success']++;
-                $stats['details'][] = array(
-                    'order_id' => $order_id,
-                    'status' => 'success',
-                    'message' => 'Envoyée avec succès (' . implode(', ', array_keys($click_ids)) . ')',
-                );
+                if (strpos($new_status, 'Ignoré (Clic expiré') !== false || strpos($new_status, 'Ignoré (Clic introuvable') !== false) {
+                    $stats['skipped_expired']++;
+                    $stats['details'][] = array(
+                        'order_id' => $order_id,
+                        'status'   => 'ignored',
+                        'message'  => $new_status,
+                    );
+                } else {
+                    $stats['rescued_success']++;
+                    $stats['details'][] = array(
+                        'order_id' => $order_id,
+                        'status'   => 'success',
+                        'message'  => 'Envoyée avec succès (' . implode(', ', array_keys($click_ids)) . ')',
+                    );
+                }
             } else {
                 $stats['rescued_failed']++;
                 $stats['details'][] = array(
                     'order_id' => $order_id,
-                    'status' => 'failed',
-                    'message' => $new_status ?: 'Échec de transmission',
+                    'status'   => 'failed',
+                    'message'  => $new_status ?: 'Échec de transmission',
                 );
             }
         }
@@ -516,6 +526,68 @@ class Woo_Gads_Api
                     }
                 }
 
+                // 2. Clic expiré (antérieur à la fenêtre de conversion de l'action Google Ads)
+                $is_click_window_expired = (
+                    stripos($pf_msg, 'click-through window') !== false ||
+                    stripos($pf_msg, 'CLICK_BEFORE_CONVERSION_CLICK_THROUGH_WINDOW') !== false ||
+                    stripos($pf_msg, 'EVENT_DATE_BEFORE_CLICK_THROUGH_WINDOW') !== false ||
+                    stripos($pf_msg, 'EXPIRED_GCLID') !== false ||
+                    stripos($pf_msg, 'occurred before this conversion') !== false
+                );
+                if ($is_click_window_expired) {
+                    $log_msg = $consent_log_msg . ' | Ignoré par Google Ads : Clic antérieur à la fenêtre de conversion (Expiré)';
+                    Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $log_msg);
+
+                    $order->update_meta_data('_gads_api_sent', '1');
+                    $order->update_meta_data('_gads_api_status', 'Ignoré (Clic expiré - hors fenêtre d\'attribution)');
+                    $order->save();
+                    update_post_meta($order_id, '_gads_api_sent', '1');
+                    update_post_meta($order_id, '_gads_api_status', 'Ignoré (Clic expiré - hors fenêtre d\'attribution)');
+
+                    $this->check_consecutive_missing_cookies();
+                    return array('success' => true, 'status' => 'expired_click', 'message' => 'Clic expiré (antérieur à la fenêtre de conversion)');
+                }
+
+                // 3. Conversion déjà enregistrée dans Google Ads
+                $is_already_exists = (
+                    stripos($pf_msg, 'CLICK_CONVERSION_ALREADY_EXISTS') !== false ||
+                    stripos($pf_msg, 'CONVERSION_ALREADY_EXISTS') !== false ||
+                    stripos($pf_msg, 'already exists') !== false
+                );
+                if ($is_already_exists) {
+                    $log_msg = $consent_log_msg . ' | Succès : Conversion déjà enregistrée dans Google Ads';
+                    Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $log_msg);
+
+                    $order->update_meta_data('_gads_api_sent', '1');
+                    $order->update_meta_data('_gads_api_status', 'Succès (Déjà enregistrée dans Google Ads)');
+                    $order->save();
+                    update_post_meta($order_id, '_gads_api_sent', '1');
+                    update_post_meta($order_id, '_gads_api_status', 'Succès (Déjà enregistrée dans Google Ads)');
+
+                    $this->check_consecutive_missing_cookies();
+                    return array('success' => true, 'status' => 'already_exists');
+                }
+
+                // 4. Clic introuvable dans Google Ads (clic de test, bot ou purge Google > 90 jours)
+                $is_click_not_found = (
+                    stripos($pf_msg, 'CLICK_NOT_FOUND') !== false ||
+                    stripos($pf_msg, 'The click for this conversion was not found') !== false
+                );
+                if ($is_click_not_found) {
+                    $log_msg = $consent_log_msg . ' | Ignoré par Google Ads : Clic introuvable';
+                    Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $log_msg);
+
+                    $order->update_meta_data('_gads_api_sent', '1');
+                    $order->update_meta_data('_gads_api_status', 'Ignoré (Clic introuvable dans Google Ads)');
+                    $order->save();
+                    update_post_meta($order_id, '_gads_api_sent', '1');
+                    update_post_meta($order_id, '_gads_api_status', 'Ignoré (Clic introuvable dans Google Ads)');
+
+                    $this->check_consecutive_missing_cookies();
+                    return array('success' => false, 'status' => 'click_not_found', 'message' => 'Clic introuvable dans Google Ads');
+                }
+
+                // 5. Autre échec partiel inattendu : Journalisation et alerte email
                 $error_log_msg = $consent_log_msg . ' | Échec partiel : ' . $pf_msg;
                 Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $error_log_msg);
 

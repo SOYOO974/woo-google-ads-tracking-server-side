@@ -173,6 +173,7 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
         wp_enqueue_script($this->plugin_name . '-capture');
 
         $settings = get_option('woo_gads_settings');
+        $click_window_days = isset($settings['click_window_days']) ? max(1, min(90, (int) $settings['click_window_days'])) : 30;
         $is_builtin = !empty($settings['enable_builtin_banner']);
 
         $banner_message = !empty($settings['banner_message']) ? $settings['banner_message'] : "Nous utilisons des cookies pour assurer le bon fonctionnement du site, mesurer l'audience et personnaliser les publicités.";
@@ -202,33 +203,72 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
             'accent_color'      => esc_attr($accent_color),
             'accept_text_color' => esc_attr($accept_text_color),
             'position'          => esc_attr($position),
+            'click_window_days' => (int) $click_window_days,
         );
 
         $js = "
 		(function() {
-			// 1. Capture des identifiants de clics Google Ads (gclid, wbraid, gbraid)
+			// 1. Capture et gestion anti-zombie des identifiants de clics Google Ads (gclid, wbraid, gbraid)
+			var clickWindowDays = " . (int) $click_window_days . ";
+			var maxAgeMs = clickWindowDays * 24 * 60 * 60 * 1000;
 			var urlParams = new URLSearchParams(window.location.search);
 			var paramsToSave = ['gclid', 'wbraid', 'gbraid'];
-			
+
 			paramsToSave.forEach(function(param) {
 				if (urlParams.has(param)) {
+					// Nouveau clic publicitaire détecté dans l'URL
 					var value = urlParams.get(param);
-					var date = new Date();
-					date.setTime(date.getTime() + (90 * 24 * 60 * 60 * 1000));
-					document.cookie = 'woo_gads_' + param + '=' + value + '; expires=' + date.toUTCString() + '; path=/; SameSite=Lax';
-					try { localStorage.setItem('woo_gads_' + param, value); } catch(e) {}
+					var now = Date.now();
+					var expireDate = new Date(now + maxAgeMs);
+					document.cookie = 'woo_gads_' + param + '=' + value + '; expires=' + expireDate.toUTCString() + '; path=/; SameSite=Lax';
+					try {
+						localStorage.setItem('woo_gads_' + param, JSON.stringify({
+							value: value,
+							timestamp: now
+						}));
+					} catch(e) {}
 				} else {
-					// Restauration de sécurité depuis localStorage si le cookie a été purgé par le navigateur (ex: Safari ITP)
+					// Navigation sans clic dans l'URL : contrôle anti-zombie et restauration conditionnelle
 					var cookieMatch = document.cookie.match(new RegExp('(^|; )woo_gads_' + param + '=([^;]+)'));
-					if (!cookieMatch) {
+					var storedRaw = null;
+					try { storedRaw = localStorage.getItem('woo_gads_' + param); } catch(e) {}
+
+					if (storedRaw) {
+						var storedVal = null;
+						var storedTime = null;
 						try {
-							var storedVal = localStorage.getItem('woo_gads_' + param);
-							if (storedVal) {
-								var date = new Date();
-								date.setTime(date.getTime() + (90 * 24 * 60 * 60 * 1000));
-								document.cookie = 'woo_gads_' + param + '=' + storedVal + '; expires=' + date.toUTCString() + '; path=/; SameSite=Lax';
+							var parsed = JSON.parse(storedRaw);
+							if (parsed && typeof parsed === 'object' && parsed.value) {
+								storedVal = parsed.value;
+								storedTime = parsed.timestamp;
 							}
-						} catch(e) {}
+						} catch(e) {
+							// Chaîne brute sans horodatage (format hérité des anciennes versions)
+							storedVal = null;
+							storedTime = null;
+						}
+
+						var isExpired = false;
+						if (storedTime && typeof storedTime === 'number') {
+							if ((Date.now() - storedTime) > maxAgeMs) {
+								isExpired = true;
+							}
+						} else {
+							// Entrée héritée sans horodatage ou invalide : purge immédiate pour stopper la résurrection des clics zombies
+							isExpired = true;
+						}
+
+						if (isExpired) {
+							try { localStorage.removeItem('woo_gads_' + param); } catch(e) {}
+							document.cookie = 'woo_gads_' + param + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax';
+						} else if (!cookieMatch && storedVal) {
+							// Valeur valide non expirée : restauration du cookie pour la durée restante exacte
+							var remainingMs = maxAgeMs - (Date.now() - storedTime);
+							if (remainingMs > 0) {
+								var expDate = new Date(Date.now() + remainingMs);
+								document.cookie = 'woo_gads_' + param + '=' + storedVal + '; expires=' + expDate.toUTCString() + '; path=/; SameSite=Lax';
+							}
+						}
 					}
 				}
 			});

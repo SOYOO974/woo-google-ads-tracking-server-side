@@ -47,6 +47,21 @@ $settings = get_option('woo_gads_settings');
             </td>
         </tr>
         <tr>
+            <th scope="row">Fenêtre d'attribution des clics</th>
+            <td>
+                <?php $click_window = isset($settings['click_window_days']) ? (int) $settings['click_window_days'] : 30; ?>
+                <select name="woo_gads_settings[click_window_days]" id="woo_gads_click_window_days" style="max-width: 280px;">
+                    <option value="30" <?php selected($click_window, 30); ?>>30 jours (Standard Google Ads - Recommandé)</option>
+                    <option value="60" <?php selected($click_window, 60); ?>>60 jours</option>
+                    <option value="90" <?php selected($click_window, 90); ?>>90 jours (Maximum Google Ads)</option>
+                </select>
+                <p class="description" style="margin-top: 5px;">
+                    Durée de rétention des cookies et du stockage local des identifiants (<code>gclid</code>, <code>wbraid</code>, <code>gbraid</code>).<br>
+                    <strong>Alignement impératif avec Google Ads :</strong> Cette durée doit correspondre à la <em>« Fenêtre de conversion après clic »</em> paramétrée sur votre action de conversion dans Google Ads (<em>Objectifs &gt; Conversions &gt; Récapitulatif &gt; [Action de conversion] &gt; Paramètres</em>). Les clics dépassant cette fenêtre sont automatiquement purgés du navigateur pour prévenir tout rejet d'importation par Google Ads.
+                </p>
+            </td>
+        </tr>
+        <tr>
             <th scope="row">Client ID OAuth</th>
             <td>
                 <input type="text" name="woo_gads_settings[client_id]"

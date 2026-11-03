@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.4
 Requires PHP: 7.4
-Stable tag: 1.5.5
+Stable tag: 1.5.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.5.6 =
+* Correctif critique HPOS (Erreur 500 `WC_Order_Factory::get_orders` à la mise à jour) : Report de l'exécution de `Woo_Gads_Db::maybe_upgrade()` et `backfill_recent_orders()` sur un hook dédié `init` à la priorité `20` (strictement après `WC_Post_Types::register_post_types` exécuté à `init` priorité `5`), avec vérification explicite de `did_action('woocommerce_after_register_post_type')` et `wc_get_order_type('shop_order')`.
+* Verrou anti-boucle de crash & isolation des exceptions : Persistance immédiate de l'option `woo_gads_db_version` avant le rétro-remplissage des commandes, passage de `'skip_invalid' => true` à `wc_get_orders()` et encapsulation intégrale dans un bloc `try / catch (\Throwable $e)`.
+* Déduplication de `capture_request_click_ids()` : Ajout d'un verrou statique par requête et exécution à la priorité `20` sur `init` / `woocommerce_init`.
 
 = 1.5.5 =
 * Extraction multi-sources du GCLID (`$_GET['gclid']`, cookie Google Conversion Linker `_gcl_aw` / `_gcl_dc` / `_gcl_gb` et WooCommerce Order Attribution `_wc_order_attribution_session_entry`) : Décodage automatique du 3e segment des cookies `_gcl_aw` (`GCL.<timestamp>.<gclid>`), stockage en cookie first-party longue durée (90 jours par défaut) + session WooCommerce (`WC()->session`), et synchronisation via champs cachés lors des mises à jour AJAX du checkout (`woocommerce_checkout_update_order_review`).

@@ -13,18 +13,29 @@ class Woo_Gads_Db
      */
     public static function maybe_upgrade($force = false)
     {
+        $force = ($force === true);
+
+        if (
+            !did_action('woocommerce_after_register_post_type') ||
+            !function_exists('wc_get_order_type') ||
+            !wc_get_order_type('shop_order')
+        ) {
+            return;
+        }
+
         $installed_ver = get_option('woo_gads_db_version', '');
-        $target_ver = defined('WOO_GADS_VERSION') ? WOO_GADS_VERSION : '1.5.5';
+        $target_ver = defined('WOO_GADS_VERSION') ? WOO_GADS_VERSION : '1.5.6';
 
         if (!$force && $installed_ver === $target_ver) {
             return;
         }
 
+        // Update version option BEFORE running backfill to prevent any infinite crash loop in production
+        update_option('woo_gads_db_version', $target_ver, true);
+
         self::ensure_columns();
         self::migrate_historical_logs();
         self::backfill_recent_orders();
-
-        update_option('woo_gads_db_version', $target_ver, true);
     }
 
     /**
@@ -105,111 +116,133 @@ class Woo_Gads_Db
      */
     public static function backfill_recent_orders()
     {
-        if (!function_exists('wc_get_orders') || !class_exists('Woo_Gads_Api')) {
+        if (
+            !did_action('woocommerce_after_register_post_type') ||
+            !function_exists('wc_get_orders') ||
+            !function_exists('wc_get_order_type') ||
+            !wc_get_order_type('shop_order') ||
+            !class_exists('Woo_Gads_Api')
+        ) {
             return;
         }
 
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'woo_gads_logs';
+        try {
+            global $wpdb;
+            if (!isset($wpdb) || !is_object($wpdb)) {
+                return;
+            }
+            $table_name = $wpdb->prefix . 'woo_gads_logs';
 
-        // 1. First recover click IDs and consent from wp_woo_gads_logs payloads for logged orders
-        if ($wpdb->get_var("SHOW TABLES LIKE '{$table_name}'") === $table_name) {
-            $logs = $wpdb->get_results("SELECT order_id, payload FROM {$table_name} ORDER BY id DESC LIMIT 50");
-            if (is_array($logs)) {
-                foreach ($logs as $log) {
-                    $order_id = (int) $log->order_id;
-                    if ($order_id <= 0) {
-                        continue;
-                    }
-                    $order = wc_get_order($order_id);
-                    if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
-                        continue;
-                    }
+            // 1. First recover click IDs and consent from wp_woo_gads_logs payloads for logged orders
+            if ($wpdb->get_var("SHOW TABLES LIKE '{$table_name}'") === $table_name) {
+                $logs = $wpdb->get_results("SELECT order_id, payload FROM {$table_name} ORDER BY id DESC LIMIT 50");
+                if (is_array($logs)) {
+                    foreach ($logs as $log) {
+                        try {
+                            $order_id = (int) $log->order_id;
+                            if ($order_id <= 0) {
+                                continue;
+                            }
+                            $order = wc_get_order($order_id);
+                            if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
+                                continue;
+                            }
 
-                    $payload = maybe_unserialize($log->payload);
-                    if (is_string($payload)) {
-                        $decoded = json_decode($payload, true);
-                        if (is_array($decoded)) {
-                            $payload = $decoded;
-                        }
-                    }
+                            $payload = maybe_unserialize($log->payload);
+                            if (is_string($payload)) {
+                                $decoded = json_decode($payload, true);
+                                if (is_array($decoded)) {
+                                    $payload = $decoded;
+                                }
+                            }
 
-                    $modified = false;
-                    if (is_array($payload) && !empty($payload['conversions'][0]) && is_array($payload['conversions'][0])) {
-                        $conv = $payload['conversions'][0];
-                        foreach (array('gclid', 'wbraid', 'gbraid') as $param) {
-                            if (!empty($conv[$param]) && is_string($conv[$param])) {
-                                $val = trim($conv[$param]);
-                                foreach (array("_woo_gads_{$param}", "_gads_{$param}", "_{$param}") as $meta_key) {
-                                    if ($order->get_meta($meta_key) !== $val) {
-                                        $order->update_meta_data($meta_key, $val);
-                                        update_post_meta($order_id, $meta_key, $val);
+                            $modified = false;
+                            if (is_array($payload) && !empty($payload['conversions'][0]) && is_array($payload['conversions'][0])) {
+                                $conv = $payload['conversions'][0];
+                                foreach (array('gclid', 'wbraid', 'gbraid') as $param) {
+                                    if (!empty($conv[$param]) && is_string($conv[$param])) {
+                                        $val = trim($conv[$param]);
+                                        foreach (array("_woo_gads_{$param}", "_gads_{$param}", "_{$param}") as $meta_key) {
+                                            if ($order->get_meta($meta_key) !== $val) {
+                                                $order->update_meta_data($meta_key, $val);
+                                                update_post_meta($order_id, $meta_key, $val);
+                                                $modified = true;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!empty($conv['consent']['adUserData'])) {
+                                    $consent_norm = (strtoupper($conv['consent']['adUserData']) === 'GRANTED') ? 'granted' : 'denied';
+                                    if ($order->get_meta('_gads_consent') !== $consent_norm) {
+                                        $order->update_meta_data('_gads_consent', $consent_norm);
+                                        update_post_meta($order_id, '_gads_consent', $consent_norm);
                                         $modified = true;
                                     }
                                 }
                             }
-                        }
 
-                        if (!empty($conv['consent']['adUserData'])) {
-                            $consent_norm = (strtoupper($conv['consent']['adUserData']) === 'GRANTED') ? 'granted' : 'denied';
-                            if ($order->get_meta('_gads_consent') !== $consent_norm) {
-                                $order->update_meta_data('_gads_consent', $consent_norm);
-                                update_post_meta($order_id, '_gads_consent', $consent_norm);
-                                $modified = true;
+                            if ($modified) {
+                                $order->save();
                             }
+                        } catch (\Throwable $inner_e) {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // 2. Scan the 50 most recent orders to ensure all meta aliases (_woo_gads_gclid, _gads_gclid, _gclid, _gads_consent) are synchronized
+            $orders = wc_get_orders(array(
+                'limit'        => 50,
+                'orderby'      => 'date',
+                'order'        => 'DESC',
+                'type'         => 'shop_order',
+                'skip_invalid' => true,
+            ));
+
+            if (!is_array($orders)) {
+                return;
+            }
+
+            foreach ($orders as $order) {
+                try {
+                    if (!is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
+                        continue;
+                    }
+                    $order_id = $order->get_id();
+                    $modified = false;
+
+                    // Resolve click IDs (also extracts from _wc_order_attribution_session_entry and backfills all 3 keys)
+                    Woo_Gads_Api::get_order_click_id($order, 'gclid');
+                    Woo_Gads_Api::get_order_click_id($order, 'wbraid');
+                    Woo_Gads_Api::get_order_click_id($order, 'gbraid');
+
+                    // Normalize _gads_consent if _woo_gads_consent exists
+                    $existing_gads_consent = $order->get_meta('_gads_consent');
+                    if (empty($existing_gads_consent)) {
+                        $raw_consent = $order->get_meta('_woo_gads_consent');
+                        if (empty($raw_consent)) {
+                            $raw_consent = get_post_meta($order_id, '_woo_gads_consent', true);
+                        }
+                        if (!empty($raw_consent)) {
+                            $is_granted = Woo_Gads_Api::parse_consent_value($raw_consent);
+                            $norm = $is_granted ? 'granted' : 'denied';
+                            $order->update_meta_data('_gads_consent', $norm);
+                            update_post_meta($order_id, '_gads_consent', $norm);
+                            $modified = true;
                         }
                     }
 
                     if ($modified) {
                         $order->save();
                     }
+                } catch (\Throwable $inner_e) {
+                    continue;
                 }
             }
-        }
-
-        // 2. Scan the 50 most recent orders to ensure all meta aliases (_woo_gads_gclid, _gads_gclid, _gclid, _gads_consent) are synchronized
-        $orders = wc_get_orders(array(
-            'limit'   => 50,
-            'orderby' => 'date',
-            'order'   => 'DESC',
-            'type'    => 'shop_order',
-        ));
-
-        if (!is_array($orders)) {
+        } catch (\Throwable $e) {
             return;
-        }
-
-        foreach ($orders as $order) {
-            if (!is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
-                continue;
-            }
-            $order_id = $order->get_id();
-            $modified = false;
-
-            // Resolve click IDs (also extracts from _wc_order_attribution_session_entry and backfills all 3 keys)
-            Woo_Gads_Api::get_order_click_id($order, 'gclid');
-            Woo_Gads_Api::get_order_click_id($order, 'wbraid');
-            Woo_Gads_Api::get_order_click_id($order, 'gbraid');
-
-            // Normalize _gads_consent if _woo_gads_consent exists
-            $existing_gads_consent = $order->get_meta('_gads_consent');
-            if (empty($existing_gads_consent)) {
-                $raw_consent = $order->get_meta('_woo_gads_consent');
-                if (empty($raw_consent)) {
-                    $raw_consent = get_post_meta($order_id, '_woo_gads_consent', true);
-                }
-                if (!empty($raw_consent)) {
-                    $is_granted = Woo_Gads_Api::parse_consent_value($raw_consent);
-                    $norm = $is_granted ? 'granted' : 'denied';
-                    $order->update_meta_data('_gads_consent', $norm);
-                    update_post_meta($order_id, '_gads_consent', $norm);
-                    $modified = true;
-                }
-            }
-
-            if ($modified) {
-                $order->save();
-            }
         }
     }
 

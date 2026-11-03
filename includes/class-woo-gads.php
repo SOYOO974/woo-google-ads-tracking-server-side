@@ -48,9 +48,13 @@ class Woo_Gads
     {
         $plugin_public = new Woo_Gads_Public($this->get_plugin_name(), $this->get_version());
 
+        // Run database schema & order meta upgrade check on init at priority 20
+        // (strictly after WC_Post_Types::register_post_types runs at init priority 5)
+        $this->loader->add_action('init', 'Woo_Gads_Db', 'maybe_upgrade', 20, 0);
+
         // Server-side capture of $_GET['gclid'], _gcl_aw, wbraid, gbraid into 90d cookie + WC()->session
-        $this->loader->add_action('init', $plugin_public, 'capture_request_click_ids', 5);
-        $this->loader->add_action('woocommerce_init', $plugin_public, 'capture_request_click_ids', 10);
+        $this->loader->add_action('init', $plugin_public, 'capture_request_click_ids', 20);
+        $this->loader->add_action('woocommerce_init', $plugin_public, 'capture_request_click_ids', 20);
 
         // Google Consent Mode v2 early initialization at Priority 1 in wp_head
         $this->loader->add_action('wp_head', $plugin_public, 'inject_consent_mode_default', 1);

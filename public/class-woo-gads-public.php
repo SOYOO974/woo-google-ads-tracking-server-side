@@ -20,6 +20,13 @@ class Woo_Gads_Public
      */
     private static $checkout_fields_rendered = false;
 
+    /**
+     * Prevent duplicate execution of click ID capture on the same request.
+     *
+     * @var bool
+     */
+    private static $click_ids_captured = false;
+
     public function __construct($plugin_name, $version)
     {
         $this->plugin_name = $plugin_name;
@@ -189,12 +196,15 @@ class Woo_Gads_Public
      */
     public function capture_request_click_ids()
     {
-        if (class_exists('Woo_Gads_Db')) {
-            Woo_Gads_Db::maybe_upgrade();
+        if (self::$click_ids_captured) {
+            return;
         }
 
         $resolved = self::resolve_current_click_ids();
         if (empty($resolved)) {
+            if (did_action('init')) {
+                self::$click_ids_captured = true;
+            }
             return;
         }
 
@@ -207,6 +217,8 @@ class Woo_Gads_Public
             (function_exists('is_checkout') && is_checkout()) ||
             (function_exists('is_cart') && is_cart())
         );
+
+        $session_persisted = false;
 
         foreach ($resolved as $param => $value) {
             $cookie_name = 'woo_gads_' . $param;
@@ -241,8 +253,13 @@ class Woo_Gads_Public
                 if (WC()->session->has_session() || $has_url_click_id || $is_ajax_or_checkout) {
                     WC()->session->set('woo_gads_' . $param, $value);
                     WC()->session->set('_' . $param, $value);
+                    $session_persisted = true;
                 }
             }
+        }
+
+        if ($session_persisted || did_action('init')) {
+            self::$click_ids_captured = true;
         }
     }
 

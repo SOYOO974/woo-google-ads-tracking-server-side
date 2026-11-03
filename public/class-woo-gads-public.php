@@ -13,10 +13,290 @@ class Woo_Gads_Public
      */
     public static $in_scanner_check = false;
 
+    /**
+     * Prevent duplicate rendering of hidden checkout inputs.
+     *
+     * @var bool
+     */
+    private static $checkout_fields_rendered = false;
+
     public function __construct($plugin_name, $version)
     {
         $this->plugin_name = $plugin_name;
         $this->version = $version;
+    }
+
+    /**
+     * Extract a clean Google Ads Click ID from a Google Conversion Linker cookie (_gcl_aw, _gcl_dc, _gcl_gb).
+     * Expected format: GCL.<timestamp>.<gclid> (3rd segment after GCL.xxx.).
+     * Also handles GCL.<version>.<timestamp>.<gclid> or raw click IDs if present.
+     *
+     * @param string $raw_cookie Raw cookie value.
+     * @return string Clean click ID or empty string.
+     */
+    public static function extract_click_id_from_gcl_cookie($raw_cookie)
+    {
+        if (empty($raw_cookie) || !is_string($raw_cookie)) {
+            return '';
+        }
+
+        $clean = trim(urldecode($raw_cookie));
+        if ($clean === '') {
+            return '';
+        }
+
+        if (stripos($clean, 'GCL.') === 0) {
+            $all_parts = explode('.', $clean);
+            if (count($all_parts) >= 3) {
+                if (
+                    count($all_parts) >= 4 &&
+                    strlen($all_parts[1]) <= 2 &&
+                    ctype_digit($all_parts[1]) &&
+                    strlen($all_parts[2]) >= 9 &&
+                    ctype_digit($all_parts[2])
+                ) {
+                    $extracted = implode('.', array_slice($all_parts, 3));
+                } else {
+                    $extracted = implode('.', array_slice($all_parts, 2));
+                }
+                $extracted = trim($extracted);
+                return $extracted !== '' ? sanitize_text_field($extracted) : '';
+            }
+            return '';
+        }
+
+        // If it's already a raw click ID (no GCL. prefix and no spaces/JSON)
+        if (strlen($clean) > 8 && strpos($clean, '{') !== 0 && strpos($clean, ' ') === false) {
+            return sanitize_text_field($clean);
+        }
+
+        return '';
+    }
+
+    /**
+     * Return configured attribution retention window in days (default: 90 days).
+     *
+     * @return int
+     */
+    public static function get_click_window_days()
+    {
+        $settings = get_option('woo_gads_settings', array());
+        return isset($settings['click_window_days']) ? max(1, min(90, (int) $settings['click_window_days'])) : 90;
+    }
+
+    /**
+     * Resolve click IDs (gclid, wbraid, gbraid) from all available request sources:
+     * $_GET, $_POST / checkout AJAX payload, first-party cookies, _gcl_aw / _gcl_gb cookies, and WC()->session.
+     *
+     * @param array $posted_data Optional parsed POST data (e.g. from update_order_review).
+     * @return array Associative array of non-empty click IDs ['gclid' => ..., 'wbraid' => ..., 'gbraid' => ...].
+     */
+    public static function resolve_current_click_ids($posted_data = array())
+    {
+        $params = array('gclid', 'wbraid', 'gbraid');
+        $resolved = array();
+
+        foreach ($params as $param) {
+            $value = '';
+
+            // 1. Direct URL query parameter ($_GET['gclid'], $_GET['wbraid'], $_GET['gbraid'])
+            if (!empty($_GET[$param]) && is_string($_GET[$param])) {
+                $value = sanitize_text_field(wp_unslash($_GET[$param]));
+            }
+
+            // 2. Posted checkout fields (AJAX checkout or update_order_review)
+            if ($value === '' && is_array($posted_data)) {
+                if (!empty($posted_data['woo_gads_' . $param]) && is_string($posted_data['woo_gads_' . $param])) {
+                    $value = sanitize_text_field(wp_unslash($posted_data['woo_gads_' . $param]));
+                } elseif (!empty($posted_data['_' . $param]) && is_string($posted_data['_' . $param])) {
+                    $value = sanitize_text_field(wp_unslash($posted_data['_' . $param]));
+                } elseif (!empty($posted_data[$param]) && is_string($posted_data[$param])) {
+                    $value = sanitize_text_field(wp_unslash($posted_data[$param]));
+                }
+            }
+            if ($value === '') {
+                if (!empty($_POST['woo_gads_' . $param]) && is_string($_POST['woo_gads_' . $param])) {
+                    $value = sanitize_text_field(wp_unslash($_POST['woo_gads_' . $param]));
+                } elseif (!empty($_POST['_' . $param]) && is_string($_POST['_' . $param])) {
+                    $value = sanitize_text_field(wp_unslash($_POST['_' . $param]));
+                } elseif (!empty($_POST[$param]) && is_string($_POST[$param])) {
+                    $value = sanitize_text_field(wp_unslash($_POST[$param]));
+                }
+            }
+
+            // 3. Plugin first-party cookie (woo_gads_gclid, etc.)
+            if ($value === '' && !empty($_COOKIE['woo_gads_' . $param]) && is_string($_COOKIE['woo_gads_' . $param])) {
+                $value = self::extract_click_id_from_gcl_cookie(wp_unslash($_COOKIE['woo_gads_' . $param]));
+                if ($value === '') {
+                    $value = sanitize_text_field(wp_unslash($_COOKIE['woo_gads_' . $param]));
+                }
+            }
+
+            // 4. Google Conversion Linker cookies (_gcl_aw / _gcl_dc for gclid, _gcl_gb for gbraid/wbraid)
+            if ($value === '' && $param === 'gclid') {
+                if (!empty($_COOKIE['_gcl_aw'])) {
+                    $value = self::extract_click_id_from_gcl_cookie(wp_unslash($_COOKIE['_gcl_aw']));
+                }
+                if ($value === '' && !empty($_COOKIE['_gcl_dc'])) {
+                    $value = self::extract_click_id_from_gcl_cookie(wp_unslash($_COOKIE['_gcl_dc']));
+                }
+            }
+            if ($value === '' && $param === 'gbraid' && !empty($_COOKIE['_gcl_gb'])) {
+                $value = self::extract_click_id_from_gcl_cookie(wp_unslash($_COOKIE['_gcl_gb']));
+            }
+
+            // 5. Generic / third-party cookies (_gclid, gclid, wpgens_gclid)
+            if ($value === '') {
+                $fallback_cookies = array('_' . $param, $param, 'wpgens_' . $param, '_wpgens_' . $param);
+                foreach ($fallback_cookies as $ck) {
+                    if (!empty($_COOKIE[$ck]) && is_string($_COOKIE[$ck])) {
+                        $extracted = self::extract_click_id_from_gcl_cookie(wp_unslash($_COOKIE[$ck]));
+                        $value = $extracted !== '' ? $extracted : sanitize_text_field(wp_unslash($_COOKIE[$ck]));
+                        if ($value !== '') {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 6. WooCommerce Session fallback
+            if ($value === '' && function_exists('WC') && isset(WC()->session) && is_object(WC()->session)) {
+                $sess_val = WC()->session->get('woo_gads_' . $param);
+                if (empty($sess_val)) {
+                    $sess_val = WC()->session->get('_' . $param);
+                }
+                if (empty($sess_val)) {
+                    $sess_val = WC()->session->get($param);
+                }
+                if (!empty($sess_val) && is_string($sess_val)) {
+                    $value = sanitize_text_field($sess_val);
+                }
+            }
+
+            $value = trim($value);
+            if ($value !== '') {
+                $resolved[$param] = $value;
+            }
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * Server-side capture of click IDs on `init` / `woocommerce_init`.
+     * Extracts GCLID from $_GET['gclid'] and $_COOKIE['_gcl_aw'] (plus wbraid/gbraid),
+     * stores them in a 90-day first-party cookie and in WC()->session.
+     */
+    public function capture_request_click_ids()
+    {
+        if (class_exists('Woo_Gads_Db')) {
+            Woo_Gads_Db::maybe_upgrade();
+        }
+
+        $resolved = self::resolve_current_click_ids();
+        if (empty($resolved)) {
+            return;
+        }
+
+        $days = self::get_click_window_days();
+        $expire = time() + ($days * DAY_IN_SECONDS);
+        $has_url_click_id = (!empty($_GET['gclid']) || !empty($_GET['wbraid']) || !empty($_GET['gbraid']));
+        $is_ajax_or_checkout = (
+            (defined('DOING_AJAX') && DOING_AJAX) ||
+            !empty($_GET['wc-ajax']) ||
+            (function_exists('is_checkout') && is_checkout()) ||
+            (function_exists('is_cart') && is_cart())
+        );
+
+        foreach ($resolved as $param => $value) {
+            $cookie_name = 'woo_gads_' . $param;
+            $short_cookie = '_' . $param;
+
+            // Populate $_COOKIE superglobal immediately for the current request
+            $_COOKIE[$cookie_name] = $value;
+            if (empty($_COOKIE[$short_cookie])) {
+                $_COOKIE[$short_cookie] = $value;
+            }
+
+            // Set long-lived (90d) first-party cookie when landing with URL parameter or during checkout/AJAX when cookie was only in _gcl_aw
+            if (!headers_sent() && ($has_url_click_id || ($is_ajax_or_checkout && empty($_COOKIE[$cookie_name])))) {
+                if (PHP_VERSION_ID >= 70300) {
+                    setcookie($cookie_name, $value, array(
+                        'expires'  => $expire,
+                        'path'     => '/',
+                        'secure'   => is_ssl(),
+                        'httponly' => false,
+                        'samesite' => 'Lax',
+                    ));
+                } else {
+                    setcookie($cookie_name, $value, $expire, '/; SameSite=Lax', '', is_ssl(), false);
+                }
+            }
+
+            // Persist in WooCommerce Session
+            if (function_exists('WC') && isset(WC()->session) && is_object(WC()->session)) {
+                if (!WC()->session->has_session() && ($has_url_click_id || $is_ajax_or_checkout)) {
+                    WC()->session->set_customer_session_cookie(true);
+                }
+                if (WC()->session->has_session() || $has_url_click_id || $is_ajax_or_checkout) {
+                    WC()->session->set('woo_gads_' . $param, $value);
+                    WC()->session->set('_' . $param, $value);
+                }
+            }
+        }
+    }
+
+    /**
+     * Render hidden inputs inside WooCommerce checkout form so click IDs in cookies/localStorage/_gcl_aw
+     * are transmitted even if cookies are stripped during AJAX checkout POST.
+     */
+    public function render_checkout_hidden_fields()
+    {
+        if (self::$checkout_fields_rendered) {
+            return;
+        }
+        self::$checkout_fields_rendered = true;
+
+        $resolved = self::resolve_current_click_ids();
+        foreach (array('gclid', 'wbraid', 'gbraid') as $param) {
+            $val = isset($resolved[$param]) ? $resolved[$param] : '';
+            echo '<input type="hidden" name="woo_gads_' . esc_attr($param) . '" id="woo_gads_field_' . esc_attr($param) . '" value="' . esc_attr($val) . '" />';
+        }
+    }
+
+    /**
+     * Capture click IDs during WooCommerce AJAX checkout updates (?wc-ajax=update_order_review)
+     * and persist them to WC()->session and any draft/awaiting order.
+     *
+     * @param string $post_data URL-encoded form data from checkout.
+     */
+    public function on_checkout_update_order_review($post_data)
+    {
+        $parsed = array();
+        if (!empty($post_data) && is_string($post_data)) {
+            parse_str($post_data, $parsed);
+        }
+
+        $resolved = self::resolve_current_click_ids($parsed);
+        if (empty($resolved)) {
+            return;
+        }
+
+        if (function_exists('WC') && isset(WC()->session) && is_object(WC()->session)) {
+            foreach ($resolved as $param => $value) {
+                WC()->session->set('woo_gads_' . $param, $value);
+                WC()->session->set('_' . $param, $value);
+            }
+
+            // If an order is already awaiting payment or exists as a Store API draft in session, enrich it immediately
+            $draft_order_id = (int) WC()->session->get('order_awaiting_payment', 0);
+            if ($draft_order_id <= 0) {
+                $draft_order_id = (int) WC()->session->get('store_api_draft_order', 0);
+            }
+            if ($draft_order_id > 0) {
+                $this->save_click_ids($draft_order_id, $parsed);
+            }
+        }
     }
 
     /**
@@ -173,7 +453,7 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
         wp_enqueue_script($this->plugin_name . '-capture');
 
         $settings = get_option('woo_gads_settings');
-        $click_window_days = isset($settings['click_window_days']) ? max(1, min(90, (int) $settings['click_window_days'])) : 30;
+        $click_window_days = self::get_click_window_days();
         $is_builtin = !empty($settings['enable_builtin_banner']);
 
         $banner_message = !empty($settings['banner_message']) ? $settings['banner_message'] : "Nous utilisons des cookies pour assurer le bon fonctionnement du site, mesurer l'audience et personnaliser les publicités.";
@@ -208,27 +488,50 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
 
         $js = "
 		(function() {
-			// 1. Capture et gestion anti-zombie des identifiants de clics Google Ads (gclid, wbraid, gbraid)
+			// 1. Capture et gestion anti-zombie des identifiants de clics Google Ads (gclid, _gcl_aw, wbraid, gbraid)
 			var clickWindowDays = " . (int) $click_window_days . ";
 			var maxAgeMs = clickWindowDays * 24 * 60 * 60 * 1000;
 			var urlParams = new URLSearchParams(window.location.search);
 			var paramsToSave = ['gclid', 'wbraid', 'gbraid'];
 
+			function extractFromGclCookie(cookieName) {
+				var match = document.cookie.match(new RegExp('(^|; )' + cookieName + '=([^;]+)'));
+				if (!match) return null;
+				var raw = decodeURIComponent(match[2]).trim();
+				if (raw.toUpperCase().indexOf('GCL.') === 0) {
+					var parts = raw.split('.');
+					if (parts.length >= 3) {
+						var extracted = (parts.length >= 4 && parts[1].length <= 2 && /^\\d+$/.test(parts[1]) && parts[2].length >= 9 && /^\\d+$/.test(parts[2]))
+							? parts.slice(3).join('.').trim()
+							: parts.slice(2).join('.').trim();
+						return extracted || null;
+					}
+				}
+				return null;
+			}
+
 			paramsToSave.forEach(function(param) {
-				if (urlParams.has(param)) {
-					// Nouveau clic publicitaire détecté dans l'URL
-					var value = urlParams.get(param);
+				var incomingVal = urlParams.has(param) ? urlParams.get(param) : null;
+				if (!incomingVal && param === 'gclid') {
+					incomingVal = extractFromGclCookie('_gcl_aw') || extractFromGclCookie('_gcl_dc');
+				} else if (!incomingVal && param === 'gbraid') {
+					incomingVal = extractFromGclCookie('_gcl_gb');
+				}
+
+				if (incomingVal) {
+					// Clic publicitaire détecté dans l'URL ou dans le cookie Google Conversion Linker (_gcl_aw / _gcl_gb)
 					var now = Date.now();
 					var expireDate = new Date(now + maxAgeMs);
-					document.cookie = 'woo_gads_' + param + '=' + value + '; expires=' + expireDate.toUTCString() + '; path=/; SameSite=Lax';
+					document.cookie = 'woo_gads_' + param + '=' + incomingVal + '; expires=' + expireDate.toUTCString() + '; path=/; SameSite=Lax';
+					document.cookie = '_' + param + '=' + incomingVal + '; expires=' + expireDate.toUTCString() + '; path=/; SameSite=Lax';
 					try {
 						localStorage.setItem('woo_gads_' + param, JSON.stringify({
-							value: value,
+							value: incomingVal,
 							timestamp: now
 						}));
 					} catch(e) {}
 				} else {
-					// Navigation sans clic dans l'URL : contrôle anti-zombie et restauration conditionnelle
+					// Navigation sans nouveau clic : contrôle anti-zombie et restauration conditionnelle
 					var cookieMatch = document.cookie.match(new RegExp('(^|; )woo_gads_' + param + '=([^;]+)'));
 					var storedRaw = null;
 					try { storedRaw = localStorage.getItem('woo_gads_' + param); } catch(e) {}
@@ -243,7 +546,6 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
 								storedTime = parsed.timestamp;
 							}
 						} catch(e) {
-							// Chaîne brute sans horodatage (format hérité des anciennes versions)
 							storedVal = null;
 							storedTime = null;
 						}
@@ -254,7 +556,6 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
 								isExpired = true;
 							}
 						} else {
-							// Entrée héritée sans horodatage ou invalide : purge immédiate pour stopper la résurrection des clics zombies
 							isExpired = true;
 						}
 
@@ -262,16 +563,64 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
 							try { localStorage.removeItem('woo_gads_' + param); } catch(e) {}
 							document.cookie = 'woo_gads_' + param + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax';
 						} else if (!cookieMatch && storedVal) {
-							// Valeur valide non expirée : restauration du cookie pour la durée restante exacte
 							var remainingMs = maxAgeMs - (Date.now() - storedTime);
 							if (remainingMs > 0) {
 								var expDate = new Date(Date.now() + remainingMs);
 								document.cookie = 'woo_gads_' + param + '=' + storedVal + '; expires=' + expDate.toUTCString() + '; path=/; SameSite=Lax';
+								document.cookie = '_' + param + '=' + storedVal + '; expires=' + expDate.toUTCString() + '; path=/; SameSite=Lax';
 							}
 						}
 					}
 				}
 			});
+
+			// Synchronisation automatique des champs cachés du checkout WooCommerce (classique & AJAX)
+			function getActiveClickId(param) {
+				var m = document.cookie.match(new RegExp('(^|; )woo_gads_' + param + '=([^;]+)'));
+				if (m && m[2]) return decodeURIComponent(m[2]);
+				if (param === 'gclid') {
+					var gcl = extractFromGclCookie('_gcl_aw') || extractFromGclCookie('_gcl_dc');
+					if (gcl) return gcl;
+				}
+				try {
+					var raw = localStorage.getItem('woo_gads_' + param);
+					if (raw) {
+						var p = JSON.parse(raw);
+						if (p && p.value) return p.value;
+					}
+				} catch(e) {}
+				return '';
+			}
+
+			function syncCheckoutFields() {
+				var forms = document.querySelectorAll('form.checkout, form.wc-block-checkout__form');
+				paramsToSave.forEach(function(param) {
+					var val = getActiveClickId(param);
+					if (!val) return;
+					var fieldName = 'woo_gads_' + param;
+					var existingInputs = document.querySelectorAll('input[name=\"' + fieldName + '\"]');
+					if (existingInputs.length > 0) {
+						existingInputs.forEach(function(inp) { inp.value = val; });
+					} else if (forms.length > 0) {
+						forms.forEach(function(f) {
+							var hidden = document.createElement('input');
+							hidden.type = 'hidden';
+							hidden.name = fieldName;
+							hidden.value = val;
+							f.appendChild(hidden);
+						});
+					}
+				});
+			}
+
+			if (document.readyState === 'loading') {
+				document.addEventListener('DOMContentLoaded', syncCheckoutFields);
+			} else {
+				syncCheckoutFields();
+			}
+			if (typeof jQuery !== 'undefined') {
+				jQuery(document.body).on('init_checkout updated_checkout checkout_place_order', syncCheckoutFields);
+			}
 
 			// 2. Gestion de la bannière native Google Consent Mode v2 & Revoyure CNIL
 			var bannerConfig = " . wp_json_encode($banner_config) . ";
@@ -455,6 +804,13 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
         wp_add_inline_script($this->plugin_name . '-capture', $js);
     }
 
+    /**
+     * Persist captured click IDs (gclid, wbraid, gbraid) and consent state onto the WooCommerce order.
+     * Writes to _woo_gads_<param>, _gads_<param>, and _<param> (_gclid) via $order->update_meta_data() and update_post_meta().
+     *
+     * @param int|\WC_Order $order_id_or_order Order ID or WC_Order instance.
+     * @param mixed         $data              Optional checkout posted data.
+     */
     public function save_click_ids($order_id_or_order, $data = null)
     {
         $order = ($order_id_or_order instanceof WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
@@ -462,30 +818,56 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
             return;
         }
 
-        $order_id = $order->get_id();
+        $order_id = (int) $order->get_id();
+        $posted_array = is_array($data) ? $data : array();
+        $resolved = self::resolve_current_click_ids($posted_array);
 
-        // Protection anti-réentrance : éviter de réécrire plusieurs fois si plusieurs hooks s'exécutent successivement
-        if ($order->get_meta('_woo_gads_ids_saved') === '1') {
+        // Protection anti-réentrance : ne court-circuiter que si un identifiant de clic est DÉJÀ présent sur la commande
+        $already_has_click_id = (
+            !empty($order->get_meta('_woo_gads_gclid')) ||
+            !empty($order->get_meta('_woo_gads_wbraid')) ||
+            !empty($order->get_meta('_woo_gads_gbraid'))
+        );
+        if ($order->get_meta('_woo_gads_ids_saved') === '1' && ($already_has_click_id || empty($resolved))) {
             return;
         }
 
+        $saved_any_click_id = false;
         $paramsToSave = array('gclid', 'wbraid', 'gbraid');
+
         foreach ($paramsToSave as $param) {
-            $value = '';
-            $cookie_name = 'woo_gads_' . $param;
-            if (!empty($_COOKIE[$cookie_name])) {
-                $value = sanitize_text_field($_COOKIE[$cookie_name]);
-            } elseif (!empty($_COOKIE[$param])) {
-                $value = sanitize_text_field($_COOKIE[$param]);
-            } elseif (!empty($_COOKIE['wpgens_' . $param])) {
-                $value = sanitize_text_field($_COOKIE['wpgens_' . $param]);
-            } elseif (!empty($_GET[$param])) {
-                $value = sanitize_text_field($_GET[$param]);
+            $value = isset($resolved[$param]) ? $resolved[$param] : '';
+
+            // Fallback: inspect WooCommerce 8.5+ native Order Attribution landing URL (_wc_order_attribution_session_entry)
+            if ($value === '') {
+                $session_entry = $order->get_meta('_wc_order_attribution_session_entry');
+                if (empty($session_entry) && $order_id > 0) {
+                    $session_entry = get_post_meta($order_id, '_wc_order_attribution_session_entry', true);
+                }
+                if (!empty($session_entry) && is_string($session_entry) && strpos($session_entry, $param . '=') !== false) {
+                    $parsed_url = wp_parse_url($session_entry);
+                    if (!empty($parsed_url['query'])) {
+                        parse_str($parsed_url['query'], $q_vars);
+                        if (!empty($q_vars[$param]) && is_string($q_vars[$param])) {
+                            $value = sanitize_text_field(trim($q_vars[$param]));
+                        }
+                    }
+                }
             }
 
-            if (!empty($value)) {
-                $order->update_meta_data('_woo_gads_' . $param, $value);
-                update_post_meta($order_id, '_woo_gads_' . $param, $value);
+            if ($value !== '') {
+                $saved_any_click_id = true;
+                $meta_keys = array(
+                    '_woo_gads_' . $param,
+                    '_gads_' . $param,
+                    '_' . $param,
+                );
+                foreach ($meta_keys as $mk) {
+                    $order->update_meta_data($mk, $value);
+                    if ($order_id > 0) {
+                        update_post_meta($order_id, $mk, $value);
+                    }
+                }
             }
         }
 
@@ -493,10 +875,14 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
         $settings = get_option('woo_gads_settings');
         $is_builtin = !empty($settings['enable_builtin_banner']);
         $consent_cookie = $is_builtin ? 'woo_gads_consent' : (isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent');
-        
+
         $cookie_value = null;
         if (isset($_COOKIE[$consent_cookie]) && !empty($_COOKIE[$consent_cookie])) {
             $cookie_value = $_COOKIE[$consent_cookie];
+        } elseif (!empty($_COOKIE['woo_gads_consent'])) {
+            $cookie_value = $_COOKIE['woo_gads_consent'];
+        } elseif (!empty($_COOKIE['concord_consent'])) {
+            $cookie_value = $_COOKIE['concord_consent'];
         } else {
             // Fallback for prefix match if it's a concord-allow-state cookie
             if (strpos($consent_cookie, 'concord-allow-state-') === 0) {
@@ -511,14 +897,34 @@ a.woo-gads-reopen-consent { cursor: pointer; text-decoration: underline; text-un
 
         if ($cookie_value !== null) {
             $clean_val = stripslashes(urldecode($cookie_value));
+            $is_granted = class_exists('Woo_Gads_Api') ? Woo_Gads_Api::parse_consent_value($clean_val) : false;
+            $norm_consent = $is_granted ? 'granted' : 'denied';
+
             $order->update_meta_data('_woo_gads_consent', $clean_val);
-            update_post_meta($order_id, '_woo_gads_consent', $clean_val);
-        } else {
+            $order->update_meta_data('_gads_consent', $norm_consent);
+            if ($order_id > 0) {
+                update_post_meta($order_id, '_woo_gads_consent', $clean_val);
+                update_post_meta($order_id, '_gads_consent', $norm_consent);
+            }
+        } elseif (empty($order->get_meta('_woo_gads_consent'))) {
             $order->update_meta_data('_woo_gads_consent', 'no_cookie_found');
-            update_post_meta($order_id, '_woo_gads_consent', 'no_cookie_found');
+            $order->update_meta_data('_gads_consent', 'denied');
+            if ($order_id > 0) {
+                update_post_meta($order_id, '_woo_gads_consent', 'no_cookie_found');
+                update_post_meta($order_id, '_gads_consent', 'denied');
+            }
         }
 
-        $order->update_meta_data('_woo_gads_ids_saved', '1');
-        $order->save();
+        if ($saved_any_click_id) {
+            $order->update_meta_data('_woo_gads_ids_saved', '1');
+            if ($order_id > 0) {
+                update_post_meta($order_id, '_woo_gads_ids_saved', '1');
+            }
+        }
+
+        // Only call $order->save() if the order already has a database ID (during woocommerce_checkout_create_order, WC saves right after)
+        if ($order_id > 0) {
+            $order->save();
+        }
     }
 }

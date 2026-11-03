@@ -295,10 +295,12 @@ $logs = Woo_Gads_Db::get_logs(50);
                             $consent = get_post_meta($order_id, '_woo_gads_consent', true);
                         }
 
-                        // Click IDs (Native + WP Gens fallback)
+                        // Click IDs (Native + _gclid + _gads_gclid + WP Gens + WC Attribution fallback)
                         $gclid = Woo_Gads_Api::get_order_click_id($order, 'gclid');
                         $wbraid = Woo_Gads_Api::get_order_click_id($order, 'wbraid');
                         $gbraid = Woo_Gads_Api::get_order_click_id($order, 'gbraid');
+                        $raw_gclid_meta = $order->get_meta('_gclid') ?: get_post_meta($order_id, '_gclid', true);
+                        $gads_gclid_meta = $order->get_meta('_gads_gclid') ?: get_post_meta($order_id, '_gads_gclid', true);
                         $wpgens_gclid = $order->get_meta('_wpgens_gclid') ?: ($order->get_meta('wpgens_gclid') ?: (get_post_meta($order_id, '_wpgens_gclid', true) ?: get_post_meta($order_id, 'wpgens_gclid', true)));
                         $ids = array_filter(array('GCLID' => $gclid, 'WBRAID' => $wbraid, 'GBRAID' => $gbraid));
 
@@ -337,16 +339,11 @@ $logs = Woo_Gads_Db::get_logs(50);
                         } elseif ($consent === 'no_cookie_found') {
                             $consent_display = '<span style="color:#d63638; font-weight:bold;">DENIED (Cookie absent)</span><br><small style="color:#646970;">Cookie introuvable au checkout</small>';
                         } else {
-                            $decoded = html_entity_decode(stripslashes($consent), ENT_QUOTES);
-                            $parsed = json_decode($decoded, true);
-                            if (is_array($parsed) && isset($parsed['marketing'])) {
-                                if ($parsed['marketing'] === true) {
-                                    $consent_display = '<span style="color:#00a32a; font-weight:bold;">GRANTED (Accepté)</span>';
-                                } else {
-                                    $consent_display = '<span style="color:#dba617; font-weight:bold;">DENIED (Refusé)</span>';
-                                }
+                            $is_granted = Woo_Gads_Api::parse_consent_value($consent);
+                            if ($is_granted) {
+                                $consent_display = '<span style="color:#00a32a; font-weight:bold;">GRANTED (Accepté)</span>';
                             } else {
-                                $consent_display = '<span style="color:#d63638; font-weight:bold;">Erreur Format / DENIED</span>';
+                                $consent_display = '<span style="color:#dba617; font-weight:bold;">DENIED (Refusé)</span>';
                             }
                         }
 
@@ -415,6 +412,8 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 </div>
                                 <div id="meta-<?php echo esc_attr($order_id); ?>" style="display:none; margin-top:8px; padding:8px 10px; background:#f6f7f7; border:1px solid #dcdcde; border-radius:4px; font-family:monospace; font-size:11px; text-align:left; line-height:1.6;">
                                     <div><strong>_woo_gads_gclid :</strong> <?php echo esc_html($gclid ?: '(vide)'); ?></div>
+                                    <div><strong>_gclid :</strong> <?php echo esc_html($raw_gclid_meta ?: '(vide)'); ?></div>
+                                    <div><strong>_gads_gclid :</strong> <?php echo esc_html($gads_gclid_meta ?: '(vide)'); ?></div>
                                     <?php if (!empty($wpgens_gclid)) : ?>
                                         <div><strong>_wpgens_gclid (WP Gens) :</strong> <span style="color:#00a32a; font-weight:bold;"><?php echo esc_html($wpgens_gclid); ?></span></div>
                                     <?php endif; ?>
@@ -441,7 +440,7 @@ $logs = Woo_Gads_Db::get_logs(50);
             Cet outil analyse les commandes WooCommerce passées (HPOS & tables historiques) sur la période sélectionnée afin de renvoyer automatiquement à Google Ads toutes les conversions publicitaires qui n'ont pas encore été transmises.
         </p>
         <ul style="list-style: disc; margin-left: 20px; color: #50575e; font-size: 13px; line-height: 1.6;">
-            <li><strong>Détection multi-sources des clics :</strong> Recherche les identifiants de clic (<code>gclid</code>, <code>wbraid</code>, <code>gbraid</code>) dans les métadonnées natives ainsi que dans les extensions tierces de tracking (ex: WP Gens UTM Tracking).</li>
+            <li><strong>Détection multi-sources des clics :</strong> Recherche les identifiants de clic (<code>gclid</code>, <code>_gcl_aw</code>, <code>wbraid</code>, <code>gbraid</code>) dans les métadonnées natives, WooCommerce Order Attribution et les extensions tierces de tracking (ex: WP Gens UTM Tracking).</li>
             <li><strong>Horodatage historique réel :</strong> Chaque commande est transmise avec sa date et heure réelles de création (<code>conversionDateTime</code>) pour garantir une attribution exacte et sans décalage dans vos rapports Google Ads.</li>
             <li><strong>Protection anti-sur-attribution :</strong> Les commandes directes, organiques ou hors Google Ads (sans aucun identifiant de clic) sont ignorées et ne font l'objet d'aucun appel API.</li>
             <li><strong>Anti-doublon strict :</strong> Les commandes déjà transmises avec succès à Google Ads ne sont jamais renvoyées.</li>
@@ -481,7 +480,7 @@ $logs = Woo_Gads_Db::get_logs(50);
                 <th style="width: 150px;">Date</th>
                 <th style="width: 80px;">Order ID</th>
                 <th style="width: 80px;">HTTP</th>
-                <th>Erreur</th>
+                <th>Statut &amp; Consentement</th>
                 <th>Payload</th>
                 <th>Réponse API</th>
                 <th style="width: 100px;">Action</th>
@@ -506,15 +505,25 @@ $logs = Woo_Gads_Db::get_logs(50);
                             </a></td>
                         <td>
                             <?php
-                            if ($log->http_status == 200) {
-                                echo '<span style="color:green;font-weight:bold;">200</span>';
+                            if ($log->http_status >= 200 && $log->http_status < 300) {
+                                echo '<span style="color:green;font-weight:bold;">' . esc_html($log->http_status) . '</span>';
                             } else {
                                 echo '<span style="color:red;font-weight:bold;">' . esc_html($log->http_status) . '</span>';
                             }
                             ?>
                         </td>
                         <td>
-                            <?php echo esc_html($log->error); ?>
+                            <?php
+                            $row_status = isset($log->status) ? $log->status : (($log->http_status >= 200 && $log->http_status < 300 && empty($log->error)) ? 'success' : 'error');
+                            $row_msg = !empty($log->message) ? $log->message : '';
+                            if (!empty($log->error)) {
+                                echo '<span style="color:#d63638; font-weight:bold;">Erreur :</span> ' . esc_html($log->error);
+                            } elseif ($row_status === 'ignored') {
+                                echo '<span style="color:#646970; font-weight:bold;">Ignoré :</span> ' . esc_html($row_msg ?: 'Ignoré');
+                            } else {
+                                echo '<span style="color:#00a32a; font-weight:bold;">Succès :</span> ' . esc_html($row_msg ?: 'Envoi réussi');
+                            }
+                            ?>
                         </td>
                         <td>
                             <textarea readonly rows="2"

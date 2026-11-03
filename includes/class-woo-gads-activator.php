@@ -15,6 +15,8 @@ class Woo_Gads_Activator
 			time datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
 			order_id bigint(20) NOT NULL,
 			http_status smallint(5) NOT NULL,
+			status varchar(32) DEFAULT 'success' NOT NULL,
+			message text NOT NULL,
 			payload text NOT NULL,
 			response text NOT NULL,
 			error text NOT NULL,
@@ -23,6 +25,10 @@ class Woo_Gads_Activator
 
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
+
+        if (class_exists('Woo_Gads_Db')) {
+            Woo_Gads_Db::maybe_upgrade(true);
+        }
     }
 
 }

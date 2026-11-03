@@ -48,6 +48,10 @@ class Woo_Gads
     {
         $plugin_public = new Woo_Gads_Public($this->get_plugin_name(), $this->get_version());
 
+        // Server-side capture of $_GET['gclid'], _gcl_aw, wbraid, gbraid into 90d cookie + WC()->session
+        $this->loader->add_action('init', $plugin_public, 'capture_request_click_ids', 5);
+        $this->loader->add_action('woocommerce_init', $plugin_public, 'capture_request_click_ids', 10);
+
         // Google Consent Mode v2 early initialization at Priority 1 in wp_head
         $this->loader->add_action('wp_head', $plugin_public, 'inject_consent_mode_default', 1);
 
@@ -62,7 +66,13 @@ class Woo_Gads
         // Shortcode registration on init
         $this->loader->add_action('init', $plugin_public, 'register_shortcodes');
 
-        // Capture click IDs and consent across all checkout modes (Classic Shortcode, Blocks Store API, Processed, New Order)
+        // Checkout hidden fields and AJAX order review updates
+        $this->loader->add_action('woocommerce_after_order_notes', $plugin_public, 'render_checkout_hidden_fields', 10);
+        $this->loader->add_action('woocommerce_review_order_before_submit', $plugin_public, 'render_checkout_hidden_fields', 10);
+        $this->loader->add_action('woocommerce_checkout_update_order_review', $plugin_public, 'on_checkout_update_order_review', 10, 1);
+
+        // Capture click IDs and consent across all checkout modes (Create Order, Classic Shortcode, Blocks Store API, Processed, New Order)
+        $this->loader->add_action('woocommerce_checkout_create_order', $plugin_public, 'save_click_ids', 20, 2);
         $this->loader->add_action('woocommerce_checkout_update_order_meta', $plugin_public, 'save_click_ids', 10, 2);
         $this->loader->add_action('woocommerce_store_api_checkout_update_order_meta', $plugin_public, 'save_click_ids', 10, 1);
         $this->loader->add_action('woocommerce_checkout_order_processed', $plugin_public, 'save_click_ids', 10, 3);

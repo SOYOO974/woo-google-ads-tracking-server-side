@@ -49,15 +49,15 @@ $settings = get_option('woo_gads_settings');
         <tr>
             <th scope="row">Fenêtre d'attribution des clics</th>
             <td>
-                <?php $click_window = isset($settings['click_window_days']) ? (int) $settings['click_window_days'] : 30; ?>
+                <?php $click_window = isset($settings['click_window_days']) ? (int) $settings['click_window_days'] : 90; ?>
                 <select name="woo_gads_settings[click_window_days]" id="woo_gads_click_window_days" style="max-width: 280px;">
-                    <option value="30" <?php selected($click_window, 30); ?>>30 jours (Standard Google Ads - Recommandé)</option>
+                    <option value="30" <?php selected($click_window, 30); ?>>30 jours (Standard Google Ads)</option>
                     <option value="60" <?php selected($click_window, 60); ?>>60 jours</option>
-                    <option value="90" <?php selected($click_window, 90); ?>>90 jours (Maximum Google Ads)</option>
+                    <option value="90" <?php selected($click_window, 90); ?>>90 jours (Longue durée First-Party - Recommandé)</option>
                 </select>
                 <p class="description" style="margin-top: 5px;">
-                    Durée de rétention des cookies et du stockage local des identifiants (<code>gclid</code>, <code>wbraid</code>, <code>gbraid</code>).<br>
-                    <strong>Alignement impératif avec Google Ads :</strong> Cette durée doit correspondre à la <em>« Fenêtre de conversion après clic »</em> paramétrée sur votre action de conversion dans Google Ads (<em>Objectifs &gt; Conversions &gt; Récapitulatif &gt; [Action de conversion] &gt; Paramètres</em>). Les clics dépassant cette fenêtre sont automatiquement purgés du navigateur pour prévenir tout rejet d'importation par Google Ads.
+                    Durée de rétention des cookies first-party et du stockage local des identifiants (<code>gclid</code>, <code>_gcl_aw</code>, <code>wbraid</code>, <code>gbraid</code>).<br>
+                    <strong>Alignement avec Google Ads :</strong> Si votre action de conversion dans Google Ads utilise une fenêtre plus courte (ex: 30 jours), les clics dépassant la fenêtre de Google Ads sont automatiquement classés en « Ignoré (Clic expiré) » sans générer d'alerte d'erreur.
                 </p>
             </td>
         </tr>
@@ -119,7 +119,7 @@ $settings = get_option('woo_gads_settings');
                     <strong>Activer la bannière de consentement intégrée (Google Consent Mode v2)</strong>
                 </label>
                 <p class="description" style="margin-top: 5px;">
-                    Affiche une bannière native ultra-légère (< 4 Ko) conforme RGPD/CNIL, qui envoie automatiquement les signaux <code>gtag('consent', 'update', ...)</code> au navigateur et gère le cookie <code>woo_gads_consent</code> sans nécessiter de plugin externe (Concord, Complianz, etc.).
+                    Affiche une bannière native ultra-légère (&lt; 4 Ko) conforme RGPD/CNIL, qui envoie automatiquement les signaux <code>gtag('consent', 'update', ...)</code> au navigateur et gère le cookie <code>woo_gads_consent</code> sans nécessiter de plugin externe (Concord, Complianz, etc.).
                 </p>
 
                 <div id="woo-gads-builtin-banner-options" style="margin-top: 15px; padding: 15px; background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 4px; border-left: 4px solid #2271b1; <?php echo $is_builtin ? '' : 'display:none;'; ?>">

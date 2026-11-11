@@ -24,7 +24,7 @@ class Woo_Gads_Db
         }
 
         $installed_ver = get_option('woo_gads_db_version', '');
-        $target_ver = defined('WOO_GADS_VERSION') ? WOO_GADS_VERSION : '1.5.6';
+        $target_ver = defined('WOO_GADS_VERSION') ? WOO_GADS_VERSION : '1.6.0';
 
         if (!$force && $installed_ver === $target_ver) {
             return;
@@ -39,7 +39,7 @@ class Woo_Gads_Db
     }
 
     /**
-     * Ensure `status` and `message` columns exist on wp_woo_gads_logs.
+     * Ensure `action_type`, `status`, and `message` columns exist on wp_woo_gads_logs.
      */
     public static function ensure_columns()
     {
@@ -63,6 +63,9 @@ class Woo_Gads_Db
             return;
         }
 
+        if (!in_array('action_type', $columns, true)) {
+            $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN action_type varchar(20) NOT NULL DEFAULT 'purchase' AFTER order_id");
+        }
         if (!in_array('status', $columns, true)) {
             $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN status varchar(32) NOT NULL DEFAULT 'success' AFTER http_status");
         }
@@ -73,7 +76,8 @@ class Woo_Gads_Db
 
     /**
      * Repair historical HTTP 2xx rows where informational consent strings ("Envoi avec données clients (GRANTED)", etc.)
-     * were stored in the `error` column and caused WP Agent Bridge to count them as errors.
+     * were stored in the `error` column and caused WP Agent Bridge to count them as errors,
+     * and tag quote/lead payloads (`devis-{id}`) with `action_type = 'lead'`.
      */
     public static function migrate_historical_logs()
     {
@@ -107,6 +111,16 @@ class Woo_Gads_Db
              SET status = 'error'
              WHERE http_status < 200 OR http_status >= 300 OR (error != '' AND error IS NOT NULL)"
         );
+
+        // 3. Tag lead payloads (`devis-{order_id}`) with action_type = 'lead'
+        $columns = $wpdb->get_col("SHOW COLUMNS FROM {$table_name}", 0);
+        if (is_array($columns) && in_array('action_type', $columns, true)) {
+            $wpdb->query(
+                "UPDATE {$table_name}
+                 SET action_type = 'lead'
+                 WHERE payload LIKE '%devis-%' AND (action_type = '' OR action_type = 'purchase')"
+            );
+        }
     }
 
     /**
@@ -260,11 +274,22 @@ class Woo_Gads_Db
      * @param string      $error       Error details (empty on HTTP 2xx success).
      * @param string|null $status      Explicit status ('success', 'ignored', 'error'). Auto-detected if null.
      * @param string      $message     Informational/consent log message (e.g., "Envoi avec données clients (GRANTED)").
+     * @param string      $action_type Conversion action type: 'purchase' (Achat) or 'lead' (Devis).
      */
-    public static function insert_log($order_id, $http_status, $payload, $response, $error = '', $status = null, $message = '')
+    public static function insert_log($order_id, $http_status, $payload, $response, $error = '', $status = null, $message = '', $action_type = 'purchase')
     {
         global $wpdb;
         self::ensure_columns();
+
+        $normalized_type = ($action_type === 'lead') ? 'lead' : 'purchase';
+        if (
+            $normalized_type === 'purchase' &&
+            is_array($payload) &&
+            !empty($payload['conversions'][0]['orderId']) &&
+            strpos((string) $payload['conversions'][0]['orderId'], 'devis-') === 0
+        ) {
+            $normalized_type = 'lead';
+        }
 
         $http_code = (int) $http_status;
         $is_http_2xx = ($http_code >= 200 && $http_code < 300);
@@ -299,6 +324,7 @@ class Woo_Gads_Db
         if (!isset($wpdb) || !is_object($wpdb)) {
             return array(
                 'order_id'    => (int) $order_id,
+                'action_type' => $normalized_type,
                 'http_status' => $http_code,
                 'status'      => $status,
                 'message'     => $message,
@@ -313,6 +339,7 @@ class Woo_Gads_Db
             array(
                 'time'        => current_time('mysql'),
                 'order_id'    => (int) $order_id,
+                'action_type' => $normalized_type,
                 'http_status' => $http_code,
                 'status'      => $status,
                 'message'     => (string) $message,
@@ -326,6 +353,7 @@ class Woo_Gads_Db
 
         return array(
             'order_id'    => (int) $order_id,
+            'action_type' => $normalized_type,
             'http_status' => $http_code,
             'status'      => $status,
             'message'     => $message,
@@ -336,6 +364,7 @@ class Woo_Gads_Db
     public static function get_logs($limit = 50)
     {
         global $wpdb;
+        self::ensure_columns();
         $table_name = $wpdb->prefix . 'woo_gads_logs';
 
         return $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_name ORDER BY id DESC LIMIT %d", $limit));

@@ -36,6 +36,7 @@ class Woo_Gads
 
         $this->loader->add_action('admin_menu', $plugin_admin, 'add_plugin_admin_menu');
         $this->loader->add_action('admin_init', $plugin_admin, 'register_settings');
+        $this->loader->add_filter('option_page_capability_woo_gads_options', $plugin_admin, 'get_admin_capability');
         $this->loader->add_action('wp_ajax_woo_gads_test_connection', $plugin_admin, 'test_connection');
         $this->loader->add_action('wp_ajax_woo_gads_retry_conversion', $plugin_admin, 'retry_conversion');
         $this->loader->add_action('wp_ajax_woo_gads_batch_rescue', $plugin_admin, 'batch_rescue');
@@ -83,14 +84,20 @@ class Woo_Gads
         $this->loader->add_action('woocommerce_new_order', $plugin_public, 'save_click_ids', 10, 2);
 
         $plugin_api = new Woo_Gads_Api();
-        // Hook into order status processing, completed, and on-hold
-        $this->loader->add_action('woocommerce_order_status_on-hold', $plugin_api, 'trigger_conversion', 10, 1);
-        $this->loader->add_action('woocommerce_order_status_processing', $plugin_api, 'trigger_conversion', 10, 1);
-        $this->loader->add_action('woocommerce_order_status_completed', $plugin_api, 'trigger_conversion', 10, 1);
-
-        // Safety nets: trigger on payment complete and any status changes
-        $this->loader->add_action('woocommerce_payment_complete', $plugin_api, 'trigger_conversion', 10, 1);
+        // Purchase conversion hooks (order status processing, completed, on-hold, payment complete, status transitions)
+        $this->loader->add_action('woocommerce_order_status_on-hold', $plugin_api, 'on_order_status_trigger', 10, 1);
+        $this->loader->add_action('woocommerce_order_status_processing', $plugin_api, 'on_order_status_trigger', 10, 1);
+        $this->loader->add_action('woocommerce_order_status_completed', $plugin_api, 'on_order_status_trigger', 10, 1);
+        $this->loader->add_action('woocommerce_payment_complete', $plugin_api, 'on_order_status_trigger', 10, 1);
         $this->loader->add_action('woocommerce_order_status_changed', $plugin_api, 'on_order_status_changed', 10, 4);
+
+        // Quote / Lead conversion hooks ("Demande de devis") — priority >= 20, strictly AFTER save_click_ids (prio 10)
+        $this->loader->add_action('woocommerce_checkout_order_processed', $plugin_api, 'on_lead_order_hook', 25, 1);
+        $this->loader->add_action('woocommerce_new_order', $plugin_api, 'on_lead_order_hook', 25, 1);
+        $this->loader->add_action('woocommerce_store_api_checkout_update_order_meta', $plugin_api, 'on_lead_order_hook', 25, 1);
+        $this->loader->add_action('woocommerce_order_status_on-hold', $plugin_api, 'on_lead_order_hook', 20, 1);
+        $this->loader->add_action('woocommerce_order_status_pending', $plugin_api, 'on_lead_order_hook', 20, 1);
+        $this->loader->add_action('woocommerce_order_status_changed', $plugin_api, 'on_lead_status_changed', 20, 4);
     }
 
     public function run()

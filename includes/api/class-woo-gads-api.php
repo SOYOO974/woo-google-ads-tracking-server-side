@@ -2,6 +2,22 @@
 
 class Woo_Gads_Api
 {
+    /**
+     * Per-request runtime deduplication locks keyed by order ID.
+     *
+     * @var array<int, bool>
+     */
+    private static $purchases_sent_in_request = array();
+    private static $leads_sent_in_request = array();
+
+    /**
+     * Reset in-memory per-request deduplication locks (useful for CLI/batch tests).
+     */
+    public static function reset_runtime_locks()
+    {
+        self::$purchases_sent_in_request = array();
+        self::$leads_sent_in_request = array();
+    }
 
     public static function get_target_statuses($settings = null)
     {
@@ -25,6 +41,20 @@ class Woo_Gads_Api
             $statuses = array('processing', 'completed');
         }
 
+        $normalized = array();
+        foreach ($statuses as $st) {
+            if (is_string($st) && $st !== '') {
+                $st = trim($st);
+                if (strpos($st, 'wc-') === 0) {
+                    $st = substr($st, 3);
+                }
+                if ($st !== '') {
+                    $normalized[] = $st;
+                }
+            }
+        }
+        $statuses = $normalized;
+
         // Essential e-commerce rule: In WooCommerce, 'processing' (En cours) means the order was paid.
         // Once shipped or fulfilled, it naturally moves to 'completed' (Terminée).
         // Therefore, whenever 'processing' is an enabled trigger status, 'completed' is also legitimate and must be included.
@@ -33,6 +63,382 @@ class Woo_Gads_Api
         }
 
         return array_values(array_unique($statuses));
+    }
+
+    /**
+     * Return the list of quote / lead payment method IDs that must NEVER trigger a Purchase conversion
+     * unless the order is genuinely paid.
+     *
+     * Default: array('we_quote_request'), filterable via 'woo_gads_lead_payment_methods'.
+     *
+     * @param array|null $settings Plugin settings array.
+     * @return array<int, string>
+     */
+    public static function get_lead_payment_methods($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+        if (!is_array($settings)) {
+            $settings = array();
+        }
+
+        if (!array_key_exists('lead_payment_methods', $settings)) {
+            $methods = array('we_quote_request');
+        } else {
+            $raw = $settings['lead_payment_methods'];
+            if (is_array($raw)) {
+                $items = $raw;
+            } elseif (is_string($raw)) {
+                $items = preg_split('/[\s,;]+/', $raw);
+            } else {
+                $items = array();
+            }
+
+            $methods = array();
+            if (is_array($items)) {
+                foreach ($items as $item) {
+                    if (!is_scalar($item)) {
+                        continue;
+                    }
+                    $clean = preg_replace('/[^a-zA-Z0-9_\-]/', '', trim((string) $item));
+                    if ($clean !== '') {
+                        $methods[] = $clean;
+                    }
+                }
+            }
+        }
+
+        $filtered = apply_filters('woo_gads_lead_payment_methods', $methods, $settings);
+        if (!is_array($filtered)) {
+            return array();
+        }
+
+        $final = array();
+        foreach ($filtered as $m) {
+            if (is_scalar($m)) {
+                $clean = trim((string) $m);
+                if ($clean !== '') {
+                    $final[] = $clean;
+                }
+            }
+        }
+
+        return array_values(array_unique($final));
+    }
+
+    /**
+     * Check whether an order uses a configured quote / lead payment method (e.g. 'we_quote_request').
+     *
+     * @param \WC_Order|int $order    Order object or ID.
+     * @param array|null    $settings Optional plugin settings.
+     * @return bool
+     */
+    public static function is_lead_order($order, $settings = null)
+    {
+        $wc_order = ($order instanceof \WC_Order) ? $order : (is_numeric($order) ? wc_get_order($order) : null);
+        if (!$wc_order || !is_a($wc_order, 'WC_Order')) {
+            return false;
+        }
+
+        $payment_method = method_exists($wc_order, 'get_payment_method') ? trim((string) $wc_order->get_payment_method()) : '';
+        if ($payment_method === '') {
+            $order_id = (int) $wc_order->get_id();
+            $payment_method = trim((string) $wc_order->get_meta('_payment_method'));
+            if ($payment_method === '' && $order_id > 0) {
+                $payment_method = trim((string) get_post_meta($order_id, '_payment_method', true));
+            }
+        }
+
+        if ($payment_method === '') {
+            return false;
+        }
+
+        $lead_methods = array_map('strtolower', self::get_lead_payment_methods($settings));
+        return in_array(strtolower($payment_method), $lead_methods, true);
+    }
+
+    /**
+     * Determine if an order is genuinely paid ($order->get_date_paid() non-null or $order->is_paid()).
+     *
+     * @param \WC_Order|int $order
+     * @return bool
+     */
+    public static function is_order_really_paid($order)
+    {
+        $wc_order = ($order instanceof \WC_Order) ? $order : (is_numeric($order) ? wc_get_order($order) : null);
+        if (!$wc_order || !is_a($wc_order, 'WC_Order')) {
+            return false;
+        }
+
+        $date_paid = null;
+        if (method_exists($wc_order, 'get_date_paid')) {
+            $date_paid = $wc_order->get_date_paid('edit');
+            if (empty($date_paid)) {
+                $date_paid = $wc_order->get_date_paid();
+            }
+        }
+
+        $is_paid = (!empty($date_paid)) || (method_exists($wc_order, 'is_paid') && $wc_order->is_paid());
+
+        return (bool) apply_filters('woo_gads_is_order_paid', $is_paid, $wc_order);
+    }
+
+    /**
+     * Lock A check: true when the order uses a lead/quote payment method AND has NOT been genuinely paid.
+     * Such orders must NEVER be sent as Purchase conversions, even with $force = true.
+     *
+     * @param \WC_Order|int $order
+     * @param array|null    $settings
+     * @return bool
+     */
+    public static function is_unpaid_lead_order($order, $settings = null)
+    {
+        return self::is_lead_order($order, $settings) && !self::is_order_really_paid($order);
+    }
+
+    /**
+     * Return eligible order statuses for Lead / Quote conversions (default: ['on-hold', 'pending']).
+     *
+     * @param array|null $settings
+     * @return array<int, string>
+     */
+    public static function get_lead_target_statuses($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+
+        $statuses = array();
+        if (is_array($settings) && isset($settings['lead_order_statuses']) && is_array($settings['lead_order_statuses']) && !empty($settings['lead_order_statuses'])) {
+            foreach ($settings['lead_order_statuses'] as $st) {
+                if (is_string($st) && $st !== '') {
+                    $st = trim($st);
+                    if (strpos($st, 'wc-') === 0) {
+                        $st = substr($st, 3);
+                    }
+                    if ($st !== '') {
+                        $statuses[] = $st;
+                    }
+                }
+            }
+        }
+
+        if (empty($statuses)) {
+            $statuses = array('on-hold', 'pending');
+        }
+
+        $filtered = apply_filters('woo_gads_lead_target_statuses', array_values(array_unique($statuses)), $settings);
+        return is_array($filtered) ? array_values(array_unique($filtered)) : array('on-hold', 'pending');
+    }
+
+    /**
+     * Check whether the "Quote Request" (Demande de devis) conversion action is enabled and configured.
+     *
+     * @param array|null $settings
+     * @return bool
+     */
+    public static function is_lead_conversion_enabled($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+        if (!is_array($settings)) {
+            return false;
+        }
+
+        $enabled = !empty($settings['enable_lead_conversion']) && (string) $settings['enable_lead_conversion'] !== '0';
+        $action_id = isset($settings['lead_conversion_action_id']) ? trim((string) $settings['lead_conversion_action_id']) : '';
+
+        return $enabled && ($action_id !== '');
+    }
+
+    /**
+     * Return the configured lead conversion value ratio (default: 0.25).
+     *
+     * @param array|null $settings
+     * @return float
+     */
+    public static function get_lead_value_ratio($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+        if (!is_array($settings) || !isset($settings['lead_value_ratio']) || trim((string) $settings['lead_value_ratio']) === '') {
+            return 0.25;
+        }
+
+        $normalized = str_replace(',', '.', trim((string) $settings['lead_value_ratio']));
+        if (!is_numeric($normalized)) {
+            return 0.25;
+        }
+
+        return max(0.0, (float) $normalized);
+    }
+
+    /**
+     * Return the configured lead conversion value cap in EUR (default: 750.0).
+     *
+     * @param array|null $settings
+     * @return float
+     */
+    public static function get_lead_value_cap($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+        if (!is_array($settings) || !isset($settings['lead_value_cap']) || trim((string) $settings['lead_value_cap']) === '') {
+            return 750.0;
+        }
+
+        $normalized = str_replace(',', '.', trim((string) $settings['lead_value_cap']));
+        if (!is_numeric($normalized)) {
+            return 750.0;
+        }
+
+        return max(0.0, (float) $normalized);
+    }
+
+    /**
+     * Compute the capped, rounded conversion value for a quote/lead order: min(total_ttc * ratio, cap).
+     *
+     * @param \WC_Order  $order
+     * @param array|null $settings
+     * @return float
+     */
+    public static function calculate_lead_value($order, $settings = null)
+    {
+        $total = method_exists($order, 'get_total') ? (float) $order->get_total() : 0.0;
+        $ratio = self::get_lead_value_ratio($settings);
+        $cap   = self::get_lead_value_cap($settings);
+
+        $value = $total * $ratio;
+        if ($cap > 0.0) {
+            $value = min($value, $cap);
+        }
+
+        return round(max(0.0, $value), 2);
+    }
+
+    /**
+     * Normalize a conversion action identifier (numeric ID or full resource name) into
+     * "customers/{customer_id}/conversionActions/{action_id}".
+     *
+     * @param string $merchant_id   Customer ID (digits).
+     * @param string $raw_action_id Numeric ID or resource name.
+     * @return string Normalized resource name or empty string if invalid.
+     */
+    public static function format_conversion_action_resource($merchant_id, $raw_action_id)
+    {
+        $clean_merchant = preg_replace('/[^0-9]/', '', (string) $merchant_id);
+        $raw = trim((string) $raw_action_id);
+        if ($raw === '') {
+            return '';
+        }
+
+        if (preg_match('#^customers/([0-9\-]+)/conversionActions/([0-9]+)$#i', $raw, $matches)) {
+            $cust = preg_replace('/[^0-9]/', '', $matches[1]);
+            return ($cust !== '' && $matches[2] !== '') ? "customers/{$cust}/conversionActions/{$matches[2]}" : '';
+        }
+
+        if (preg_match('#^conversionActions/([0-9]+)$#i', $raw, $matches)) {
+            return ($clean_merchant !== '' && $matches[1] !== '') ? "customers/{$clean_merchant}/conversionActions/{$matches[1]}" : '';
+        }
+
+        $clean_action = preg_replace('/[^0-9]/', '', $raw);
+        if ($clean_merchant === '' || $clean_action === '') {
+            return '';
+        }
+
+        return "customers/{$clean_merchant}/conversionActions/{$clean_action}";
+    }
+
+    /**
+     * Production environment guard (default: true, filterable via 'woo_gads_is_production').
+     *
+     * @param \WC_Order|null $order
+     * @param string         $action_type 'purchase' or 'lead'.
+     * @return bool
+     */
+    public static function is_production_environment($order = null, $action_type = 'purchase')
+    {
+        return (bool) apply_filters('woo_gads_is_production', true, $order, $action_type);
+    }
+
+    /**
+     * Determine whether Google Ads API requests should include "validateOnly": true.
+     *
+     * @param array|null     $settings
+     * @param \WC_Order|null $order
+     * @param string         $action_type 'purchase' or 'lead'.
+     * @return bool
+     */
+    public static function is_validate_only($settings = null, $order = null, $action_type = 'purchase')
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+        $enabled = is_array($settings) && !empty($settings['validate_only']) && (string) $settings['validate_only'] !== '0';
+
+        return (bool) apply_filters('woo_gads_validate_only', $enabled, $order, $action_type);
+    }
+
+    /**
+     * Read an order meta value with HPOS + legacy postmeta fallback.
+     *
+     * @param \WC_Order $order
+     * @param int       $order_id
+     * @param string    $key
+     * @return string
+     */
+    private static function get_order_meta_dual($order, $order_id, $key)
+    {
+        $val = $order ? $order->get_meta($key) : '';
+        if (($val === '' || $val === null) && $order_id > 0) {
+            $val = get_post_meta($order_id, $key, true);
+        }
+        return is_scalar($val) ? (string) $val : '';
+    }
+
+    /**
+     * Persist an order meta value to both HPOS and legacy postmeta.
+     *
+     * @param \WC_Order $order
+     * @param int       $order_id
+     * @param string    $key
+     * @param string    $value
+     */
+    private static function update_order_meta_dual($order, $order_id, $key, $value)
+    {
+        if ($order) {
+            $order->update_meta_data($key, $value);
+            if ($order_id > 0) {
+                $order->save();
+            }
+        }
+        if ($order_id > 0) {
+            update_post_meta($order_id, $key, $value);
+        }
+    }
+
+    /**
+     * Delete an order meta key from both HPOS and legacy postmeta.
+     *
+     * @param \WC_Order $order
+     * @param int       $order_id
+     * @param string    $key
+     */
+    private static function delete_order_meta_dual($order, $order_id, $key)
+    {
+        if ($order) {
+            $order->delete_meta_data($key);
+            if ($order_id > 0) {
+                $order->save();
+            }
+        }
+        if ($order_id > 0) {
+            delete_post_meta($order_id, $key);
+        }
     }
 
     /**
@@ -183,7 +589,7 @@ class Woo_Gads_Api
         if ($wc_order && method_exists($wc_order, 'get_meta_data')) {
             foreach ($wc_order->get_meta_data() as $meta) {
                 $meta_key_lower = strtolower($meta->key);
-                if (strpos($meta_key_lower, '_gads_api') !== false) {
+                if (strpos($meta_key_lower, '_gads_api') !== false || strpos($meta_key_lower, '_gads_lead') !== false) {
                     continue;
                 }
                 if (strpos($meta_key_lower, $type) !== false) {
@@ -203,7 +609,7 @@ class Woo_Gads_Api
         if (is_array($raw_post_metas)) {
             foreach ($raw_post_metas as $k => $vals) {
                 $k_lower = strtolower($k);
-                if (strpos($k_lower, '_gads_api') !== false) {
+                if (strpos($k_lower, '_gads_api') !== false || strpos($k_lower, '_gads_lead') !== false) {
                     continue;
                 }
                 if (strpos($k_lower, $type) !== false) {
@@ -222,7 +628,7 @@ class Woo_Gads_Api
         // Synchronous checkout fallback: if called during the customer's own checkout/payment execution, resolve from live cookies/session
         if (
             class_exists('Woo_Gads_Public') &&
-            (did_action('woocommerce_checkout_order_processed') || did_action('woocommerce_store_api_checkout_update_order_meta')) &&
+            (did_action('woocommerce_checkout_order_processed') || did_action('woocommerce_store_api_checkout_update_order_meta') || did_action('woocommerce_new_order')) &&
             !is_admin()
         ) {
             $live_ids = Woo_Gads_Public::resolve_current_click_ids();
@@ -254,16 +660,20 @@ class Woo_Gads_Api
 
     /**
      * Batch scan and rescue past orders within a specified window (in days).
-     * Only orders with a valid click ID (GCLID, WBRAID, GBRAID) are sent to Google Ads.
-     * Non-Google Ads orders are safely marked as ignored to prevent over-attribution.
+     * - Respects Lock A: unpaid quote/lead orders are NEVER sent as Purchase conversions.
+     * - When the "Quote Request" (Demande de devis) action is enabled, rescues unsent quotes as Lead conversions.
+     * - Only orders with a valid click ID (GCLID, WBRAID, GBRAID) are sent to Google Ads.
      */
     public function batch_rescue_orders($days = 14, $force_any_status = false)
     {
         $days = max(1, min(90, (int) $days));
+        $force_any_status = ($force_any_status === true || $force_any_status === 1 || $force_any_status === '1');
         $after_date = date('Y-m-d H:i:s', strtotime("-{$days} days"));
 
         $settings = get_option('woo_gads_settings', array());
         $target_statuses = self::get_target_statuses($settings);
+        $lead_enabled = self::is_lead_conversion_enabled($settings);
+        $lead_target_statuses = self::get_lead_target_statuses($settings);
 
         // Fetch orders using WC_Order_Query
         $orders = wc_get_orders(array(
@@ -281,9 +691,11 @@ class Woo_Gads_Api
             'skipped_no_click_id' => 0,
             'skipped_status' => 0,
             'skipped_expired' => 0,
+            'skipped_unpaid_leads' => 0,
             'skipped_statuses_breakdown' => array(),
             'orders_with_click_id_blocked_by_status' => array(),
             'rescued_success' => 0,
+            'lead_rescued_success' => 0,
             'rescued_failed' => 0,
             'details' => array(),
         );
@@ -294,13 +706,100 @@ class Woo_Gads_Api
             }
             $order_id = $order->get_id();
             $order_status = $order->get_status();
-            $api_sent = $order->get_meta('_gads_api_sent');
-            if (empty($api_sent)) {
-                $api_sent = get_post_meta($order_id, '_gads_api_sent', true);
-            }
 
             // Always ensure click IDs are resolved and backfilled across _woo_gads_gclid, _gads_gclid, _gclid
             $click_ids = self::get_all_order_click_ids($order);
+
+            // =========================================================================
+            // BRANCH 1: UNPAID QUOTE / LEAD ORDER (Lock A strictly blocks Purchase)
+            // =========================================================================
+            if (self::is_unpaid_lead_order($order, $settings)) {
+                $stats['skipped_unpaid_leads']++;
+
+                // Lock A: mark Purchase status as ignored without ever touching _gads_api_sent
+                $existing_purchase_sent = self::get_order_meta_dual($order, $order_id, '_gads_api_sent');
+                if ($existing_purchase_sent !== '1') {
+                    self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (devis, non payé)');
+                }
+
+                // Rescue as Lead ("Demande de devis") ONLY if Lead tracking is enabled
+                if (!$lead_enabled) {
+                    continue;
+                }
+
+                $lead_sent = self::get_order_meta_dual($order, $order_id, '_gads_lead_sent');
+                if ($lead_sent === '1') {
+                    $stats['already_sent']++;
+                    continue;
+                }
+
+                $lead_status_eligible = in_array($order_status, $lead_target_statuses, true);
+                if (!$lead_status_eligible && !$force_any_status) {
+                    $stats['skipped_status']++;
+                    $status_name = function_exists('wc_get_order_status_name') ? wc_get_order_status_name($order_status) : $order_status;
+                    $key_label = $status_name . ' (Devis)';
+                    if (!isset($stats['skipped_statuses_breakdown'][$key_label])) {
+                        $stats['skipped_statuses_breakdown'][$key_label] = 0;
+                    }
+                    $stats['skipped_statuses_breakdown'][$key_label]++;
+                    continue;
+                }
+
+                if (empty($click_ids)) {
+                    $curr_lead_status = self::get_order_meta_dual($order, $order_id, '_gads_lead_status');
+                    if ($curr_lead_status === '' || strpos($curr_lead_status, 'En attente') !== false) {
+                        self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
+                    }
+                    $stats['skipped_no_click_id']++;
+                    continue;
+                }
+
+                // Reset failed lead marker (never touch _gads_api_sent!) and trigger lead conversion
+                self::delete_order_meta_dual($order, $order_id, '_gads_lead_sent');
+                $this->trigger_lead_conversion($order, true);
+
+                $fresh_order = wc_get_order($order_id);
+                $new_lead_sent = self::get_order_meta_dual($fresh_order ?: $order, $order_id, '_gads_lead_sent');
+                $new_lead_status = self::get_order_meta_dual($fresh_order ?: $order, $order_id, '_gads_lead_status');
+                $new_lead_val = self::get_order_meta_dual($fresh_order ?: $order, $order_id, '_gads_lead_value');
+
+                if ($new_lead_sent === '1') {
+                    if (strpos($new_lead_status, 'Ignoré (Clic expiré') !== false || strpos($new_lead_status, 'Ignoré (Clic introuvable') !== false) {
+                        $stats['skipped_expired']++;
+                        $stats['details'][] = array(
+                            'order_id'    => $order_id,
+                            'action_type' => 'lead',
+                            'status'      => 'ignored',
+                            'message'     => '[Devis] ' . $new_lead_status,
+                        );
+                    } else {
+                        $stats['rescued_success']++;
+                        $stats['lead_rescued_success']++;
+                        $val_suffix = ($new_lead_val !== '') ? ' - ' . $new_lead_val . ' €' : '';
+                        $stats['details'][] = array(
+                            'order_id'    => $order_id,
+                            'action_type' => 'lead',
+                            'status'      => 'success',
+                            'message'     => '[Devis] Envoyé avec succès (' . implode(', ', array_keys($click_ids)) . $val_suffix . ')',
+                        );
+                    }
+                } else {
+                    $stats['rescued_failed']++;
+                    $stats['details'][] = array(
+                        'order_id'    => $order_id,
+                        'action_type' => 'lead',
+                        'status'      => 'failed',
+                        'message'     => '[Devis] ' . ($new_lead_status ?: 'Échec de transmission'),
+                    );
+                }
+
+                continue;
+            }
+
+            // =========================================================================
+            // BRANCH 2: STANDARD ORDER OR PAID QUOTE -> PURCHASE CONVERSION FLOW
+            // =========================================================================
+            $api_sent = self::get_order_meta_dual($order, $order_id, '_gads_api_sent');
 
             // 1. If already sent successfully, skip
             if ($api_sent === '1') {
@@ -331,59 +830,49 @@ class Woo_Gads_Api
 
             // 3. If no click ID found -> Mark as Ignored (Non-Google Ads traffic)
             if (empty($click_ids)) {
-                $current_status = $order->get_meta('_gads_api_status');
-                if (empty($current_status)) {
-                    $current_status = get_post_meta($order_id, '_gads_api_status', true);
-                }
-                if (empty($current_status) || strpos($current_status, 'En attente') !== false) {
-                    $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
-                    $order->save();
-                    update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+                $current_status = self::get_order_meta_dual($order, $order_id, '_gads_api_status');
+                if ($current_status === '' || strpos($current_status, 'En attente') !== false) {
+                    self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
                 }
                 $stats['skipped_no_click_id']++;
                 continue;
             }
 
-            // 4. Click ID found & eligible status -> Rescue conversion
-            $order->delete_meta_data('_gads_api_sent');
-            $order->save();
-            delete_post_meta($order_id, '_gads_api_sent');
+            // 4. Click ID found & eligible status -> Rescue Purchase conversion
+            self::delete_order_meta_dual($order, $order_id, '_gads_api_sent');
 
             $this->trigger_conversion($order, true);
 
             // Reload fresh order meta
             $fresh_order = wc_get_order($order_id);
-            $new_sent = $fresh_order ? $fresh_order->get_meta('_gads_api_sent') : '';
-            if (empty($new_sent)) {
-                $new_sent = get_post_meta($order_id, '_gads_api_sent', true);
-            }
-            $new_status = $fresh_order ? $fresh_order->get_meta('_gads_api_status') : '';
-            if (empty($new_status)) {
-                $new_status = get_post_meta($order_id, '_gads_api_status', true);
-            }
+            $new_sent = self::get_order_meta_dual($fresh_order ?: $order, $order_id, '_gads_api_sent');
+            $new_status = self::get_order_meta_dual($fresh_order ?: $order, $order_id, '_gads_api_status');
 
             if ($new_sent === '1') {
                 if (strpos($new_status, 'Ignoré (Clic expiré') !== false || strpos($new_status, 'Ignoré (Clic introuvable') !== false) {
                     $stats['skipped_expired']++;
                     $stats['details'][] = array(
-                        'order_id' => $order_id,
-                        'status'   => 'ignored',
-                        'message'  => $new_status,
+                        'order_id'    => $order_id,
+                        'action_type' => 'purchase',
+                        'status'      => 'ignored',
+                        'message'     => '[Achat] ' . $new_status,
                     );
                 } else {
                     $stats['rescued_success']++;
                     $stats['details'][] = array(
-                        'order_id' => $order_id,
-                        'status'   => 'success',
-                        'message'  => 'Envoyée avec succès (' . implode(', ', array_keys($click_ids)) . ')',
+                        'order_id'    => $order_id,
+                        'action_type' => 'purchase',
+                        'status'      => 'success',
+                        'message'     => '[Achat] Envoyée avec succès (' . implode(', ', array_keys($click_ids)) . ')',
                     );
                 }
             } else {
                 $stats['rescued_failed']++;
                 $stats['details'][] = array(
-                    'order_id' => $order_id,
-                    'status'   => 'failed',
-                    'message'  => $new_status ?: 'Échec de transmission',
+                    'order_id'    => $order_id,
+                    'action_type' => 'purchase',
+                    'status'      => 'failed',
+                    'message'     => '[Achat] ' . ($new_status ?: 'Échec de transmission'),
                 );
             }
         }
@@ -391,30 +880,149 @@ class Woo_Gads_Api
         return $stats;
     }
 
-    public function on_order_status_changed($order_id, $old_status, $new_status, $order = null)
+    /**
+     * Safe hook wrapper for single-argument Purchase status hooks (prevents extra hook args from acting as $force).
+     */
+    public function on_order_status_trigger($order_id)
     {
-        $this->trigger_conversion($order ?: $order_id);
+        $this->trigger_conversion($order_id, false);
     }
 
+    public function on_order_status_changed($order_id, $old_status, $new_status, $order = null)
+    {
+        $this->trigger_conversion($order ?: $order_id, false);
+    }
+
+    /**
+     * Safe hook wrapper for Lead / Quote order creation & status hooks.
+     */
+    public function on_lead_order_hook($order_id_or_order)
+    {
+        $this->trigger_lead_conversion($order_id_or_order, false);
+    }
+
+    public function on_lead_status_changed($order_id, $old_status, $new_status, $order = null)
+    {
+        $this->trigger_lead_conversion($order ?: $order_id, false);
+    }
+
+    /**
+     * Resolve Consent Mode v2 state for an order (live $_COOKIE first if front-end, order meta fallback).
+     * Also normalizes and saves `_gads_consent` ('granted' / 'denied') for WP Agent Bridge compatibility.
+     *
+     * @param \WC_Order  $order
+     * @param int        $order_id
+     * @param array|null $settings
+     * @return array{marketing_consent: bool, consent_log_msg: string}
+     */
+    private function resolve_order_consent($order, $order_id, $settings)
+    {
+        $is_builtin = !empty($settings['enable_builtin_banner']);
+        $consent_cookie = $is_builtin ? 'woo_gads_consent' : (isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent');
+        $marketing_consent = false;
+
+        $cookie_value = null;
+        if (!is_admin() && isset($_COOKIE[$consent_cookie]) && !empty($_COOKIE[$consent_cookie])) {
+            $cookie_value = stripslashes(urldecode($_COOKIE[$consent_cookie]));
+        } elseif (!is_admin() && !empty($_COOKIE['woo_gads_consent'])) {
+            $cookie_value = stripslashes(urldecode($_COOKIE['woo_gads_consent']));
+        } elseif (!is_admin() && !empty($_COOKIE['concord_consent'])) {
+            $cookie_value = stripslashes(urldecode($_COOKIE['concord_consent']));
+        } elseif (!is_admin()) {
+            if (strpos($consent_cookie, 'concord-allow-state-') === 0) {
+                foreach ($_COOKIE as $key => $val) {
+                    if (strpos($key, 'concord-allow-state-') === 0) {
+                        $cookie_value = stripslashes(urldecode($val));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!$cookie_value) {
+            $meta_cookie = self::get_order_meta_dual($order, $order_id, '_woo_gads_consent');
+            if ($meta_cookie === '') {
+                $meta_cookie = self::get_order_meta_dual($order, $order_id, '_concord_consent');
+            }
+            if ($meta_cookie !== '' && $meta_cookie !== 'no_cookie_found') {
+                $cookie_value = stripslashes(urldecode(html_entity_decode($meta_cookie, ENT_QUOTES)));
+            }
+        }
+
+        if ($cookie_value) {
+            $marketing_consent = self::parse_consent_value($cookie_value);
+        }
+
+        // Ensure normalized _gads_consent meta is stored for WP Agent Bridge tracking/audit
+        $norm_consent = $marketing_consent ? 'granted' : 'denied';
+        self::update_order_meta_dual($order, $order_id, '_gads_consent', $norm_consent);
+
+        if ($marketing_consent) {
+            $consent_log_msg = 'Envoi avec données clients (GRANTED)';
+        } elseif ($cookie_value && $cookie_value !== 'no_cookie_found') {
+            $consent_log_msg = 'Envoi anonymisé (DENIED - Refusé par l\'utilisateur)';
+        } else {
+            $consent_log_msg = $is_builtin ? 'Envoi anonymisé (DENIED - Sans choix visiteur / Par défaut)' : 'Envoi anonymisé (DENIED - Cookie absent)';
+        }
+
+        return array(
+            'marketing_consent' => $marketing_consent,
+            'consent_log_msg'   => $consent_log_msg,
+        );
+    }
+
+    /**
+     * Trigger a Purchase conversion ("Achats") for an order.
+     *
+     * Strictly enforces Lock A: an order using a quote/lead payment method (e.g. 'we_quote_request')
+     * is NEVER sent as a Purchase unless it is genuinely paid ($order->is_paid() or get_date_paid() non-null),
+     * even when $force = true. Never touches `_gads_api_sent` on an unpaid quote.
+     *
+     * @param int|\WC_Order $order_id_or_order
+     * @param bool          $force
+     * @return array
+     */
     public function trigger_conversion($order_id_or_order, $force = false)
     {
+        $force = ($force === true);
+
         $order = ($order_id_or_order instanceof \WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
         if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
             return array('success' => false, 'status' => 'order_not_found');
         }
 
-        $order_id = $order->get_id();
-
-        // Prevent duplicate sending
-        $already_sent = $order->get_meta('_gads_api_sent');
-        if (empty($already_sent)) {
-            $already_sent = get_post_meta($order_id, '_gads_api_sent', true);
+        $order_id = (int) $order->get_id();
+        $settings = get_option('woo_gads_settings', array());
+        if (!is_array($settings)) {
+            $settings = array();
         }
+
+        // LOCK A (Highest Priority): Never send an unpaid quote/lead order as a Purchase, even if $force === true.
+        // Never touch `_gads_api_sent` so that if the quote is genuinely paid later, the real sale can still be sent.
+        if (self::is_unpaid_lead_order($order, $settings)) {
+            self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (devis, non payé)');
+            return array(
+                'success' => false,
+                'status'  => 'skipped_unpaid_lead',
+                'message' => 'Ignoré (devis, non payé)',
+            );
+        }
+
+        // Prevent duplicate sending (runtime lock + persistent meta)
+        if (!$force && !empty(self::$purchases_sent_in_request[$order_id])) {
+            return array('success' => true, 'status' => 'already_sent');
+        }
+
+        $already_sent = self::get_order_meta_dual($order, $order_id, '_gads_api_sent');
         if ($already_sent === '1' && !$force) {
             return array('success' => true, 'status' => 'already_sent');
         }
 
-        $settings = get_option('woo_gads_settings');
+        // Production environment guard
+        if (!self::is_production_environment($order, 'purchase')) {
+            self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Hors production)');
+            return array('success' => false, 'status' => 'skipped_non_production');
+        }
 
         if (!$force) {
             $target_statuses = self::get_target_statuses($settings);
@@ -430,107 +1038,189 @@ class Woo_Gads_Api
         $gbraid = self::get_order_click_id($order, 'gbraid');
 
         if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
-            $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
-            $order->save();
-            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
             return array('success' => false, 'status' => 'skipped_no_click_id');
         }
 
-        // Consent Mode v2 check
-        $is_builtin = !empty($settings['enable_builtin_banner']);
-        $consent_cookie = $is_builtin ? 'woo_gads_consent' : (isset($settings['consent_cookie_name']) && !empty($settings['consent_cookie_name']) ? $settings['consent_cookie_name'] : 'concord_consent');
-        $marketing_consent = false;
+        $consent_info = $this->resolve_order_consent($order, $order_id, $settings);
+        $marketing_consent = $consent_info['marketing_consent'];
+        $consent_log_msg = $consent_info['consent_log_msg'];
 
-        // Try to read from $_COOKIE first (if triggered synchronously during checkout)
-        // Fallback to order meta (if triggered asynchronously via webhook)
-        $cookie_value = null;
-        if (!is_admin() && isset($_COOKIE[$consent_cookie]) && !empty($_COOKIE[$consent_cookie])) {
-            $cookie_value = stripslashes(urldecode($_COOKIE[$consent_cookie]));
-        } elseif (!is_admin() && !empty($_COOKIE['woo_gads_consent'])) {
-            $cookie_value = stripslashes(urldecode($_COOKIE['woo_gads_consent']));
-        } elseif (!is_admin() && !empty($_COOKIE['concord_consent'])) {
-            $cookie_value = stripslashes(urldecode($_COOKIE['concord_consent']));
-        } elseif (!is_admin()) {
-            // Fallback for prefix match if it's a concord-allow-state cookie
-            if (strpos($consent_cookie, 'concord-allow-state-') === 0) {
-                foreach ($_COOKIE as $key => $val) {
-                    if (strpos($key, 'concord-allow-state-') === 0) {
-                        $cookie_value = stripslashes(urldecode($val));
-                        break;
-                    }
-                }
-            }
-        }
+        $developer_token = isset($settings['developer_token']) ? trim((string) $settings['developer_token']) : '';
+        $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['merchant_id']) : '';
+        $conversion_action_id = isset($settings['conversion_action_id']) ? trim((string) $settings['conversion_action_id']) : '';
+        $resource_name = self::format_conversion_action_resource($merchant_id, $conversion_action_id);
 
-        if (!$cookie_value) {
-            $meta_cookie = $order->get_meta('_woo_gads_consent');
-            if (empty($meta_cookie)) {
-                $meta_cookie = get_post_meta($order_id, '_woo_gads_consent', true);
-            }
-            if (empty($meta_cookie)) {
-                $meta_cookie = $order->get_meta('_concord_consent');
-            }
-            if (empty($meta_cookie)) {
-                $meta_cookie = get_post_meta($order_id, '_concord_consent', true);
-            }
-            if ($meta_cookie && $meta_cookie !== 'no_cookie_found') {
-                $cookie_value = stripslashes(urldecode(html_entity_decode($meta_cookie, ENT_QUOTES)));
-            }
-        }
-
-        if ($cookie_value) {
-            $marketing_consent = self::parse_consent_value($cookie_value);
-        }
-
-        // Ensure normalized _gads_consent meta is stored for WP Agent Bridge tracking/audit
-        $norm_consent = $marketing_consent ? 'granted' : 'denied';
-        $order->update_meta_data('_gads_consent', $norm_consent);
-        update_post_meta($order_id, '_gads_consent', $norm_consent);
-
-        $consent_log_msg = '';
-        if ($marketing_consent) {
-            $consent_log_msg = 'Envoi avec données clients (GRANTED)';
-        } elseif ($cookie_value && $cookie_value !== 'no_cookie_found') {
-            $consent_log_msg = 'Envoi anonymisé (DENIED - Refusé par l\'utilisateur)';
-        } else {
-            $consent_log_msg = $is_builtin ? 'Envoi anonymisé (DENIED - Sans choix visiteur / Par défaut)' : 'Envoi anonymisé (DENIED - Cookie absent)';
-        }
-
-        // Extract settings
-        $developer_token = isset($settings['developer_token']) ? $settings['developer_token'] : '';
-        $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', $settings['merchant_id']) : '';
-        $conversion_action_id = isset($settings['conversion_action_id']) ? $settings['conversion_action_id'] : '';
-        $manager_id = isset($settings['manager_id']) ? preg_replace('/[^0-9]/', '', $settings['manager_id']) : '';
-
-        if (empty($developer_token) || empty($merchant_id) || empty($conversion_action_id)) {
-            $order->update_meta_data('_gads_api_status', 'Erreur de configuration');
-            $order->save();
-            update_post_meta($order_id, '_gads_api_status', 'Erreur de configuration');
+        if ($developer_token === '' || $merchant_id === '' || $resource_name === '') {
+            self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Erreur de configuration');
             return array('success' => false, 'status' => 'config_error');
         }
+
+        $validate_only = self::is_validate_only($settings, $order, 'purchase');
+        $payload = $this->build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent, array(
+            'action_type'   => 'purchase',
+            'validate_only' => $validate_only,
+        ));
+
+        if (!$payload) {
+            self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            return array('success' => false, 'status' => 'skipped_no_click_id');
+        }
+
+        return $this->dispatch_conversion_payload($order, $order_id, $payload, $settings, $consent_log_msg, 'purchase', $validate_only);
+    }
+
+    /**
+     * Trigger a Quote / Lead conversion ("Demande de devis") for an order using a lead payment method.
+     *
+     * - Uses isolated metas: `_gads_lead_sent`, `_gads_lead_status`, `_gads_lead_value`.
+     * - NEVER writes or deletes `_gads_api_sent`.
+     * - Sets `orderId = "devis-{order_id}"` and `conversionValue = min(total_ttc * ratio, cap)`.
+     * - Skips sending a lead if the order has already become a paid sale (`is_order_really_paid`).
+     *
+     * @param int|\WC_Order $order_id_or_order
+     * @param bool          $force
+     * @return array
+     */
+    public function trigger_lead_conversion($order_id_or_order, $force = false)
+    {
+        $force = ($force === true);
+
+        $order = ($order_id_or_order instanceof \WC_Order) ? $order_id_or_order : wc_get_order($order_id_or_order);
+        if (!$order || !is_a($order, 'WC_Order') || is_a($order, 'WC_Order_Refund')) {
+            return array('success' => false, 'status' => 'order_not_found');
+        }
+
+        $order_id = (int) $order->get_id();
+        if ($order_id <= 0) {
+            return array('success' => false, 'status' => 'order_not_saved');
+        }
+
+        $settings = get_option('woo_gads_settings', array());
+        if (!is_array($settings)) {
+            $settings = array();
+        }
+
+        if (!self::is_lead_order($order, $settings)) {
+            return array('success' => false, 'status' => 'not_lead_order');
+        }
+
+        // If unpaid, ensure Purchase status explicitly reflects Lock A without touching _gads_api_sent
+        if (!self::is_order_really_paid($order)) {
+            $purchase_sent = self::get_order_meta_dual($order, $order_id, '_gads_api_sent');
+            if ($purchase_sent !== '1') {
+                self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (devis, non payé)');
+            }
+        } elseif (!$force) {
+            // Quote became a paid order -> Purchase conversion handles the real sale; never re-send lead
+            return array('success' => false, 'status' => 'already_paid_order');
+        }
+
+        // Feature toggle check
+        if (empty($settings['enable_lead_conversion']) || (string) $settings['enable_lead_conversion'] === '0') {
+            return array('success' => false, 'status' => 'lead_disabled');
+        }
+
+        // Deduplication (runtime lock + persistent _gads_lead_sent meta)
+        if (!$force && !empty(self::$leads_sent_in_request[$order_id])) {
+            return array('success' => true, 'status' => 'already_sent');
+        }
+
+        $lead_already_sent = self::get_order_meta_dual($order, $order_id, '_gads_lead_sent');
+        if ($lead_already_sent === '1' && !$force) {
+            return array('success' => true, 'status' => 'already_sent');
+        }
+
+        // Production environment guard
+        if (!self::is_production_environment($order, 'lead')) {
+            self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Hors production)');
+            return array('success' => false, 'status' => 'skipped_non_production');
+        }
+
+        if (!$force) {
+            $lead_statuses = self::get_lead_target_statuses($settings);
+            $current_status = $order->get_status();
+
+            if (!in_array($current_status, $lead_statuses, true)) {
+                return array('success' => false, 'status' => 'ineligible_status');
+            }
+        }
+
+        $gclid = self::get_order_click_id($order, 'gclid');
+        $wbraid = self::get_order_click_id($order, 'wbraid');
+        $gbraid = self::get_order_click_id($order, 'gbraid');
+
+        if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
+            self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
+            return array('success' => false, 'status' => 'skipped_no_click_id');
+        }
+
+        $lead_value = self::calculate_lead_value($order, $settings);
+        self::update_order_meta_dual($order, $order_id, '_gads_lead_value', number_format($lead_value, 2, '.', ''));
+
+        $consent_info = $this->resolve_order_consent($order, $order_id, $settings);
+        $marketing_consent = $consent_info['marketing_consent'];
+        $consent_log_msg = $consent_info['consent_log_msg'];
+
+        $developer_token = isset($settings['developer_token']) ? trim((string) $settings['developer_token']) : '';
+        $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['merchant_id']) : '';
+        $lead_action_id = isset($settings['lead_conversion_action_id']) ? trim((string) $settings['lead_conversion_action_id']) : '';
+        $resource_name = self::format_conversion_action_resource($merchant_id, $lead_action_id);
+
+        if ($developer_token === '' || $merchant_id === '' || $resource_name === '') {
+            self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Erreur de configuration (Devis)');
+            return array('success' => false, 'status' => 'config_error');
+        }
+
+        $validate_only = self::is_validate_only($settings, $order, 'lead');
+        $payload = $this->build_payload($order, $merchant_id, $lead_action_id, $marketing_consent, array(
+            'action_type'      => 'lead',
+            'conversion_value' => $lead_value,
+            'order_id_prefix'  => 'devis-',
+            'validate_only'    => $validate_only,
+        ));
+
+        if (!$payload) {
+            self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
+            return array('success' => false, 'status' => 'skipped_no_click_id');
+        }
+
+        return $this->dispatch_conversion_payload($order, $order_id, $payload, $settings, $consent_log_msg, 'lead', $validate_only);
+    }
+
+    /**
+     * Shared Google Ads API HTTP transport, OAuth 401 auto-refresh, partialFailureError handling,
+     * Click ID-only fallback, database logging, and isolated order meta persistence.
+     *
+     * @param \WC_Order $order
+     * @param int       $order_id
+     * @param array     $payload
+     * @param array     $settings
+     * @param string    $consent_log_msg
+     * @param string    $action_type   'purchase' or 'lead'.
+     * @param bool      $validate_only Whether validateOnly mode is active.
+     * @return array
+     */
+    private function dispatch_conversion_payload($order, $order_id, $payload, $settings, $consent_log_msg, $action_type = 'purchase', $validate_only = false)
+    {
+        $is_lead = ($action_type === 'lead');
+        $sent_meta_key = $is_lead ? '_gads_lead_sent' : '_gads_api_sent';
+        $status_meta_key = $is_lead ? '_gads_lead_status' : '_gads_api_status';
+        $mode_suffix = $validate_only ? ' [validateOnly]' : '';
+
+        $developer_token = isset($settings['developer_token']) ? trim((string) $settings['developer_token']) : '';
+        $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['merchant_id']) : '';
+        $manager_id = isset($settings['manager_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['manager_id']) : '';
 
         // Get Access Token
         $oauth = new Woo_Gads_Oauth();
         $access_token = $oauth->get_access_token();
 
         if (!$access_token) {
-            Woo_Gads_Db::insert_log($order_id, 0, 'N/A', 'N/A', 'OAuth Access Token missing', 'error', $consent_log_msg);
-            $order->update_meta_data('_gads_api_status', 'Erreur OAuth');
-            $order->save();
-            update_post_meta($order_id, '_gads_api_status', 'Erreur OAuth');
-            $this->send_error_email($order_id, 'Token OAuth manquant ou expiré. Veuillez vérifier votre connexion dans les réglages du plugin.');
+            Woo_Gads_Db::insert_log($order_id, 0, 'N/A', 'N/A', 'OAuth Access Token missing', 'error', $consent_log_msg . $mode_suffix, $action_type);
+            self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Erreur OAuth');
+            $this->send_error_email($order_id, 'Token OAuth manquant ou expiré. Veuillez vérifier votre connexion dans les réglages du plugin.', $action_type);
             return array('success' => false, 'status' => 'oauth_error');
-        }
-
-        // Build Payload
-        $payload = $this->build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent);
-
-        if (!$payload) {
-            // Missing essential click IDs
-            $order->update_meta_data('_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
-            $order->save();
-            update_post_meta($order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
-            return;
         }
 
         // Send to API
@@ -571,198 +1261,210 @@ class Woo_Gads_Api
 
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
-            Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . ' | Erreur HTTP: ' . $error_message, 'error', $consent_log_msg);
-            $order->update_meta_data('_gads_api_sent', 'Failed: ' . $error_message);
-            $order->update_meta_data('_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
-            $order->save();
-            update_post_meta($order_id, '_gads_api_sent', 'Failed: ' . $error_message);
-            update_post_meta($order_id, '_gads_api_status', 'Erreur HTTP: ' . substr($error_message, 0, 50));
-            $this->send_error_email($order_id, 'Erreur de requête HTTP cURL/WordPress : ' . $error_message);
+            Woo_Gads_Db::insert_log($order_id, 0, $payload, 'N/A', $consent_log_msg . $mode_suffix . ' | Erreur HTTP: ' . $error_message, 'error', $consent_log_msg . $mode_suffix, $action_type);
+            self::update_order_meta_dual($order, $order_id, $sent_meta_key, 'Failed: ' . $error_message);
+            self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Erreur HTTP: ' . substr($error_message, 0, 50));
+            $this->send_error_email($order_id, 'Erreur de requête HTTP cURL/WordPress : ' . $error_message, $action_type);
             $this->check_consecutive_missing_cookies();
             return array('success' => false, 'status' => 'http_error', 'message' => $error_message);
-        } else {
-            $body_decoded = !empty($body) ? json_decode($body, true) : null;
-            $is_http_2xx = ($http_status >= 200 && $http_status < 300);
-            $has_partial_failure = ($is_http_2xx && is_array($body_decoded) && !empty($body_decoded['partialFailureError']));
+        }
 
-            if ($has_partial_failure) {
-                $pf_error = $body_decoded['partialFailureError'];
-                $pf_msg = isset($pf_error['message']) ? $pf_error['message'] : 'Erreur de conversion partielle';
-                if (!empty($pf_error['details']) && is_array($pf_error['details'])) {
-                    foreach ($pf_error['details'] as $detail) {
-                        if (!empty($detail['errors']) && is_array($detail['errors'])) {
-                            foreach ($detail['errors'] as $err) {
-                                if (!empty($err['message'])) {
-                                    $pf_msg .= ' | ' . $err['message'];
-                                }
+        $body_decoded = !empty($body) ? json_decode($body, true) : null;
+        $is_http_2xx = ($http_status >= 200 && $http_status < 300);
+        $has_partial_failure = ($is_http_2xx && is_array($body_decoded) && !empty($body_decoded['partialFailureError']));
+
+        if ($has_partial_failure) {
+            $pf_error = $body_decoded['partialFailureError'];
+            $pf_msg = isset($pf_error['message']) ? $pf_error['message'] : 'Erreur de conversion partielle';
+            if (!empty($pf_error['details']) && is_array($pf_error['details'])) {
+                foreach ($pf_error['details'] as $detail) {
+                    if (!empty($detail['errors']) && is_array($detail['errors'])) {
+                        foreach ($detail['errors'] as $err) {
+                            if (!empty($err['message'])) {
+                                $pf_msg .= ' | ' . $err['message'];
                             }
                         }
                     }
                 }
+            }
 
-                // Filet de sécurité résilient : Si Google Ads refuse les identifiants utilisateur car les conditions de données client
-                // ne sont pas encore acceptées dans le compte, repli immédiat sur le Click ID seul (GCLID/WBRAID/GBRAID) pour ne perdre AUCUNE conversion.
-                $is_terms_error = (stripos($pf_msg, 'CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS') !== false || stripos($pf_msg, 'customer data processing terms') !== false);
-                if ($is_terms_error && !empty($payload['conversions'][0]['userIdentifiers'])) {
-                    $fallback_payload = $payload;
-                    unset($fallback_payload['conversions'][0]['userIdentifiers']);
+            // 1. Resilient fallback: if Google Ads rejects userIdentifiers because Customer Data Terms are not yet accepted,
+            // immediately retry with Click ID only (GCLID/WBRAID/GBRAID) so zero conversion is lost.
+            $is_terms_error = (stripos($pf_msg, 'CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS') !== false || stripos($pf_msg, 'customer data processing terms') !== false);
+            if ($is_terms_error && !empty($payload['conversions'][0]['userIdentifiers'])) {
+                $fallback_payload = $payload;
+                unset($fallback_payload['conversions'][0]['userIdentifiers']);
 
-                    $fb_response = wp_remote_post($url, array(
-                        'method'  => 'POST',
-                        'headers' => $headers,
-                        'body'    => wp_json_encode($fallback_payload),
-                        'timeout' => 20,
-                    ));
+                $fb_response = wp_remote_post($url, array(
+                    'method'  => 'POST',
+                    'headers' => $headers,
+                    'body'    => wp_json_encode($fallback_payload),
+                    'timeout' => 20,
+                ));
 
-                    if (!is_wp_error($fb_response)) {
-                        $fb_http_status = (int) wp_remote_retrieve_response_code($fb_response);
-                        $fb_body = wp_remote_retrieve_body($fb_response);
-                        $fb_body_decoded = !empty($fb_body) ? json_decode($fb_body, true) : null;
-                        $fb_is_2xx = ($fb_http_status >= 200 && $fb_http_status < 300);
-                        $fb_has_partial = ($fb_is_2xx && is_array($fb_body_decoded) && !empty($fb_body_decoded['partialFailureError']));
+                if (!is_wp_error($fb_response)) {
+                    $fb_http_status = (int) wp_remote_retrieve_response_code($fb_response);
+                    $fb_body = wp_remote_retrieve_body($fb_response);
+                    $fb_body_decoded = !empty($fb_body) ? json_decode($fb_body, true) : null;
+                    $fb_is_2xx = ($fb_http_status >= 200 && $fb_http_status < 300);
+                    $fb_has_partial = ($fb_is_2xx && is_array($fb_body_decoded) && !empty($fb_body_decoded['partialFailureError']));
 
-                        if ($fb_is_2xx && !$fb_has_partial) {
-                            $fb_log_msg = $consent_log_msg . ' | Succès (Repli Click ID seul - Conditions données client non validées)';
-                            Woo_Gads_Db::insert_log($order_id, $fb_http_status, $fallback_payload, $fb_body_decoded, '', 'success', $fb_log_msg);
+                    if ($fb_is_2xx && !$fb_has_partial) {
+                        $fb_log_msg = $consent_log_msg . $mode_suffix . ' | Succès (Repli Click ID seul - Conditions données client non validées)';
+                        Woo_Gads_Db::insert_log($order_id, $fb_http_status, $fallback_payload, $fb_body_decoded, '', 'success', $fb_log_msg, $action_type);
 
-                            $order->update_meta_data('_gads_api_sent', '1');
-                            $order->update_meta_data('_gads_api_status', 'Succès (Repli Click ID seul)');
-                            $order->save();
-                            update_post_meta($order_id, '_gads_api_sent', '1');
-                            update_post_meta($order_id, '_gads_api_status', 'Succès (Repli Click ID seul)');
-
-                            $this->send_error_email($order_id, 'Alerte Google Ads : La commande #' . $order_id . ' a été transmise avec succès grâce à son Click ID (GCLID/WBRAID/GBRAID), mais les données client (email, téléphone) ont été rejetées car les Conditions relatives au traitement des données client ne sont pas encore validées dans votre compte Google Ads (Objectifs > Conversions > Paramètres des conversions). Veuillez vous rendre dans Google Ads pour les valider afin d\'activer les conversions améliorées.');
-                            $this->check_consecutive_missing_cookies();
-                            return array('success' => true, 'status' => 'success_click_id_fallback');
+                        if ($is_lead) {
+                            self::$leads_sent_in_request[$order_id] = true;
+                        } else {
+                            self::$purchases_sent_in_request[$order_id] = true;
                         }
+                        self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
+                        self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Succès (Repli Click ID seul)' . $mode_suffix);
+
+                        $this->send_error_email($order_id, 'Alerte Google Ads : La commande #' . $order_id . ' a été transmise avec succès grâce à son Click ID (GCLID/WBRAID/GBRAID), mais les données client (email, téléphone) ont été rejetées car les Conditions relatives au traitement des données client ne sont pas encore validées dans votre compte Google Ads (Objectifs > Conversions > Paramètres des conversions). Veuillez vous rendre dans Google Ads pour les valider afin d\'activer les conversions améliorées.', $action_type);
+                        $this->check_consecutive_missing_cookies();
+                        return array('success' => true, 'status' => 'success_click_id_fallback');
                     }
                 }
+            }
 
-                // 2. Clic expiré (antérieur à la fenêtre de conversion de l'action Google Ads)
-                $is_click_window_expired = (
-                    stripos($pf_msg, 'click-through window') !== false ||
-                    stripos($pf_msg, 'CLICK_BEFORE_CONVERSION_CLICK_THROUGH_WINDOW') !== false ||
-                    stripos($pf_msg, 'EVENT_DATE_BEFORE_CLICK_THROUGH_WINDOW') !== false ||
-                    stripos($pf_msg, 'EXPIRED_GCLID') !== false ||
-                    stripos($pf_msg, 'occurred before this conversion') !== false
-                );
-                if ($is_click_window_expired) {
-                    $log_msg = $consent_log_msg . ' | Ignoré par Google Ads : Clic antérieur à la fenêtre de conversion (Expiré)';
-                    Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'ignored', $log_msg);
+            // 2. Expired click (prior to Google Ads conversion window)
+            $is_click_window_expired = (
+                stripos($pf_msg, 'click-through window') !== false ||
+                stripos($pf_msg, 'CLICK_BEFORE_CONVERSION_CLICK_THROUGH_WINDOW') !== false ||
+                stripos($pf_msg, 'EVENT_DATE_BEFORE_CLICK_THROUGH_WINDOW') !== false ||
+                stripos($pf_msg, 'EXPIRED_GCLID') !== false ||
+                stripos($pf_msg, 'occurred before this conversion') !== false
+            );
+            if ($is_click_window_expired) {
+                $log_msg = $consent_log_msg . $mode_suffix . ' | Ignoré par Google Ads : Clic antérieur à la fenêtre de conversion (Expiré)';
+                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'ignored', $log_msg, $action_type);
 
-                    $order->update_meta_data('_gads_api_sent', '1');
-                    $order->update_meta_data('_gads_api_status', 'Ignoré (Clic expiré - hors fenêtre d\'attribution)');
-                    $order->save();
-                    update_post_meta($order_id, '_gads_api_sent', '1');
-                    update_post_meta($order_id, '_gads_api_status', 'Ignoré (Clic expiré - hors fenêtre d\'attribution)');
-
-                    $this->check_consecutive_missing_cookies();
-                    return array('success' => true, 'status' => 'expired_click', 'message' => 'Clic expiré (antérieur à la fenêtre de conversion)');
+                if ($is_lead) {
+                    self::$leads_sent_in_request[$order_id] = true;
+                } else {
+                    self::$purchases_sent_in_request[$order_id] = true;
                 }
+                self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
+                self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Ignoré (Clic expiré - hors fenêtre d\'attribution)' . $mode_suffix);
 
-                // 3. Conversion déjà enregistrée dans Google Ads
-                $is_already_exists = (
-                    stripos($pf_msg, 'CLICK_CONVERSION_ALREADY_EXISTS') !== false ||
-                    stripos($pf_msg, 'CONVERSION_ALREADY_EXISTS') !== false ||
-                    stripos($pf_msg, 'already exists') !== false
-                );
-                if ($is_already_exists) {
-                    $log_msg = $consent_log_msg . ' | Succès : Conversion déjà enregistrée dans Google Ads';
-                    Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $log_msg);
-
-                    $order->update_meta_data('_gads_api_sent', '1');
-                    $order->update_meta_data('_gads_api_status', 'Succès (Déjà enregistrée dans Google Ads)');
-                    $order->save();
-                    update_post_meta($order_id, '_gads_api_sent', '1');
-                    update_post_meta($order_id, '_gads_api_status', 'Succès (Déjà enregistrée dans Google Ads)');
-
-                    $this->check_consecutive_missing_cookies();
-                    return array('success' => true, 'status' => 'already_exists');
-                }
-
-                // 4. Clic introuvable dans Google Ads (clic de test, bot ou purge Google > 90 jours)
-                $is_click_not_found = (
-                    stripos($pf_msg, 'CLICK_NOT_FOUND') !== false ||
-                    stripos($pf_msg, 'The click for this conversion was not found') !== false
-                );
-                if ($is_click_not_found) {
-                    $log_msg = $consent_log_msg . ' | Ignoré par Google Ads : Clic introuvable';
-                    Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'ignored', $log_msg);
-
-                    $order->update_meta_data('_gads_api_sent', '1');
-                    $order->update_meta_data('_gads_api_status', 'Ignoré (Clic introuvable dans Google Ads)');
-                    $order->save();
-                    update_post_meta($order_id, '_gads_api_sent', '1');
-                    update_post_meta($order_id, '_gads_api_status', 'Ignoré (Clic introuvable dans Google Ads)');
-
-                    $this->check_consecutive_missing_cookies();
-                    return array('success' => false, 'status' => 'click_not_found', 'message' => 'Clic introuvable dans Google Ads');
-                }
-
-                // 5. Autre échec partiel inattendu : Journalisation et alerte email
-                $error_log_msg = $consent_log_msg . ' | Échec partiel : ' . $pf_msg;
-                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $error_log_msg, 'error', $consent_log_msg);
-
-                $order->update_meta_data('_gads_api_sent', 'Failed Partial: ' . substr($pf_msg, 0, 100));
-                $order->update_meta_data('_gads_api_status', 'Échec partiel - ' . substr($pf_msg, 0, 150));
-                $order->save();
-                update_post_meta($order_id, '_gads_api_sent', 'Failed Partial: ' . substr($pf_msg, 0, 100));
-                update_post_meta($order_id, '_gads_api_status', 'Échec partiel - ' . substr($pf_msg, 0, 150));
-
-                $this->send_error_email($order_id, 'Échec partiel Google Ads (HTTP 200 avec partialFailureError) : ' . $pf_msg);
                 $this->check_consecutive_missing_cookies();
-                return array('success' => false, 'status' => 'partial_failure_error', 'message' => $pf_msg);
-            } elseif ($is_http_2xx) {
-                // Envoi HTTP 2xx réussi : status = 'success', error = '' (vide), message = $consent_log_msg
-                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $consent_log_msg);
-                $order->update_meta_data('_gads_api_sent', '1');
-                $order->update_meta_data('_gads_api_status', 'Succès');
-                $order->save();
-                update_post_meta($order_id, '_gads_api_sent', '1');
-                update_post_meta($order_id, '_gads_api_status', 'Succès');
+                return array('success' => true, 'status' => 'expired_click', 'message' => 'Clic expiré (antérieur à la fenêtre de conversion)');
+            }
+
+            // 3. Conversion already exists in Google Ads
+            $is_already_exists = (
+                stripos($pf_msg, 'CLICK_CONVERSION_ALREADY_EXISTS') !== false ||
+                stripos($pf_msg, 'CONVERSION_ALREADY_EXISTS') !== false ||
+                stripos($pf_msg, 'already exists') !== false
+            );
+            if ($is_already_exists) {
+                $log_msg = $consent_log_msg . $mode_suffix . ' | Succès : Conversion déjà enregistrée dans Google Ads';
+                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $log_msg, $action_type);
+
+                if ($is_lead) {
+                    self::$leads_sent_in_request[$order_id] = true;
+                } else {
+                    self::$purchases_sent_in_request[$order_id] = true;
+                }
+                self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
+                self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Succès (Déjà enregistrée dans Google Ads)' . $mode_suffix);
+
                 $this->check_consecutive_missing_cookies();
-                return array('success' => true, 'status' => 'success');
+                return array('success' => true, 'status' => 'already_exists');
+            }
+
+            // 4. Click not found in Google Ads (test/synthetic click, bot, or > 90 days)
+            $is_click_not_found = (
+                stripos($pf_msg, 'CLICK_NOT_FOUND') !== false ||
+                stripos($pf_msg, 'The click for this conversion was not found') !== false
+            );
+            if ($is_click_not_found) {
+                $log_msg = $consent_log_msg . $mode_suffix . ' | Ignoré par Google Ads : Clic introuvable';
+                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'ignored', $log_msg, $action_type);
+
+                if ($is_lead) {
+                    self::$leads_sent_in_request[$order_id] = true;
+                } else {
+                    self::$purchases_sent_in_request[$order_id] = true;
+                }
+                self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
+                self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Ignoré (Clic introuvable dans Google Ads)' . $mode_suffix);
+
+                $this->check_consecutive_missing_cookies();
+                return array('success' => false, 'status' => 'click_not_found', 'message' => 'Clic introuvable dans Google Ads');
+            }
+
+            // 5. Unexpected partial failure: log and send email alert
+            $error_log_msg = $consent_log_msg . $mode_suffix . ' | Échec partiel : ' . $pf_msg;
+            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $error_log_msg, 'error', $consent_log_msg . $mode_suffix, $action_type);
+
+            self::update_order_meta_dual($order, $order_id, $sent_meta_key, 'Failed Partial: ' . substr($pf_msg, 0, 100));
+            self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Échec partiel - ' . substr($pf_msg, 0, 150));
+
+            $this->send_error_email($order_id, 'Échec partiel Google Ads (HTTP 200 avec partialFailureError) : ' . $pf_msg, $action_type);
+            $this->check_consecutive_missing_cookies();
+            return array('success' => false, 'status' => 'partial_failure_error', 'message' => $pf_msg);
+        } elseif ($is_http_2xx) {
+            // HTTP 2xx success: status = 'success', error = '' (empty) for WP Agent Bridge compatibility
+            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $consent_log_msg . $mode_suffix, $action_type);
+
+            if ($is_lead) {
+                self::$leads_sent_in_request[$order_id] = true;
             } else {
-                $order->update_meta_data('_gads_api_sent', 'Failed HTTP: ' . $http_status);
-                $order->update_meta_data('_gads_api_status', 'Échec API (' . $http_status . ')');
-
-                $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
-                if (!empty($body)) {
-                    if ($body_decoded && isset($body_decoded['error'])) {
-                        if (isset($body_decoded['error']['message'])) {
-                            $error_details .= ' Message : ' . $body_decoded['error']['message'];
-                        }
-                        if (isset($body_decoded['error']['details']) && is_array($body_decoded['error']['details'])) {
-                            foreach ($body_decoded['error']['details'] as $detail) {
-                                if (isset($detail['errors']) && is_array($detail['errors'])) {
-                                    foreach ($detail['errors'] as $err) {
-                                        if (isset($err['message'])) {
-                                            $error_details .= ' | Détail : ' . $err['message'];
-                                        }
+                self::$purchases_sent_in_request[$order_id] = true;
+            }
+            self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
+            self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Succès' . $mode_suffix);
+            $this->check_consecutive_missing_cookies();
+            return array('success' => true, 'status' => 'success');
+        } else {
+            $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
+            if (!empty($body)) {
+                if ($body_decoded && isset($body_decoded['error'])) {
+                    if (isset($body_decoded['error']['message'])) {
+                        $error_details .= ' Message : ' . $body_decoded['error']['message'];
+                    }
+                    if (isset($body_decoded['error']['details']) && is_array($body_decoded['error']['details'])) {
+                        foreach ($body_decoded['error']['details'] as $detail) {
+                            if (isset($detail['errors']) && is_array($detail['errors'])) {
+                                foreach ($detail['errors'] as $err) {
+                                    if (isset($err['message'])) {
+                                        $error_details .= ' | Détail : ' . $err['message'];
                                     }
                                 }
                             }
                         }
-                    } else {
-                        // Fallback pour les erreurs non-JSON (ex: page HTML 404 de Google)
-                        $error_details .= ' Détails bruts : ' . trim(substr(strip_tags($body), 0, 500));
                     }
+                } else {
+                    $error_details .= ' Détails bruts : ' . trim(substr(strip_tags($body), 0, 500));
                 }
-
-                Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $consent_log_msg . ' | ' . $error_details, 'error', $consent_log_msg);
-                $order->update_meta_data('_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
-                $order->save();
-                update_post_meta($order_id, '_gads_api_sent', 'Failed HTTP: ' . $http_status);
-                update_post_meta($order_id, '_gads_api_status', 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
-
-                $this->send_error_email($order_id, $error_details);
-                $this->check_consecutive_missing_cookies();
-                return array('success' => false, 'status' => 'api_error', 'message' => $error_details);
             }
+
+            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, $consent_log_msg . $mode_suffix . ' | ' . $error_details, 'error', $consent_log_msg . $mode_suffix, $action_type);
+            self::update_order_meta_dual($order, $order_id, $sent_meta_key, 'Failed HTTP: ' . $http_status);
+            self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Échec API (' . $http_status . ') - ' . substr($error_details, 0, 150));
+
+            $this->send_error_email($order_id, $error_details, $action_type);
+            $this->check_consecutive_missing_cookies();
+            return array('success' => false, 'status' => 'api_error', 'message' => $error_details);
         }
     }
 
-    private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent)
+    /**
+     * Build the Google Ads `uploadClickConversions` request payload for either a Purchase or a Lead/Quote.
+     *
+     * CRITICAL RULE (Incident v1.3.0 / AGENTS.md): NEVER remove the `$has_click_id` guard.
+     * Conversions without GCLID, WBRAID, or GBRAID must never be sent to avoid 100% revenue/lead over-attribution.
+     *
+     * @param \WC_Order $order
+     * @param string    $merchant_id
+     * @param string    $conversion_action_id Numeric ID or full resource name.
+     * @param bool      $marketing_consent
+     * @param array     $options              Optional keys: 'action_type', 'conversion_value', 'order_id_prefix', 'validate_only'.
+     * @return array|false
+     */
+    private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent, $options = array())
     {
         $order_id = $order->get_id();
         $gclid = self::get_order_click_id($order, 'gclid');
@@ -775,17 +1477,29 @@ class Woo_Gads_Api
             return false;
         }
 
+        $resource_name = self::format_conversion_action_resource($merchant_id, $conversion_action_id);
+        if ($resource_name === '') {
+            return false;
+        }
+
         // Use real order creation timestamp for accurate historical attribution in Google Ads
         $date_created = $order->get_date_created();
         $conversion_timestamp = $date_created ? $date_created->getTimestamp() : time();
         $conversion_date_time = gmdate('Y-m-d H:i:s+00:00', $conversion_timestamp);
 
+        $conversion_value = isset($options['conversion_value']) ? round((float) $options['conversion_value'], 2) : (float) $order->get_total();
+        $order_id_prefix = isset($options['order_id_prefix']) ? (string) $options['order_id_prefix'] : '';
+        $currency = method_exists($order, 'get_currency') ? (string) $order->get_currency() : '';
+        if ($currency === '') {
+            $currency = 'EUR';
+        }
+
         $conversion = array(
-            'conversionAction' => "customers/{$merchant_id}/conversionActions/{$conversion_action_id}",
+            'conversionAction'   => $resource_name,
             'conversionDateTime' => $conversion_date_time,
-            'conversionValue' => (float) $order->get_total(),
-            'currencyCode' => $order->get_currency(),
-            'orderId' => (string) $order_id,
+            'conversionValue'    => $conversion_value,
+            'currencyCode'       => $currency,
+            'orderId'            => $order_id_prefix . (string) $order_id,
         );
 
         if (!empty($gclid)) {
@@ -852,13 +1566,19 @@ class Woo_Gads_Api
             }
         }
 
-        return array(
-            'conversions' => array($conversion),
+        $request_body = array(
+            'conversions'    => array($conversion),
             'partialFailure' => true,
         );
+
+        if (!empty($options['validate_only'])) {
+            $request_body['validateOnly'] = true;
+        }
+
+        return $request_body;
     }
 
-    private function send_error_email($order_id, $error_message)
+    private function send_error_email($order_id, $error_message, $action_type = 'purchase')
     {
         $settings = get_option('woo_gads_settings');
 
@@ -871,10 +1591,14 @@ class Woo_Gads_Api
             return;
         }
 
-        $subject = 'Erreur Google Ads Server-Side - Commande #' . $order_id;
+        $is_lead = ($action_type === 'lead');
+        $type_label = $is_lead ? 'Demande de devis' : 'Achat';
+        $subject = $is_lead
+            ? ('Erreur Google Ads Server-Side (Devis) - Commande #' . $order_id)
+            : ('Erreur Google Ads Server-Side - Commande #' . $order_id);
 
         $message = "Bonjour,\n\n";
-        $message .= "Une erreur est survenue lors de l'envoi de la conversion pour la commande #" . $order_id . " à l'API Google Ads.\n\n";
+        $message .= "Une erreur est survenue lors de l'envoi de la conversion (" . $type_label . ") pour la commande #" . $order_id . " à l'API Google Ads.\n\n";
         $message .= "Détails de l'erreur :\n" . $error_message . "\n\n";
         $message .= "Vous pouvez consulter le tableau de bord (onglet Diagnostic de l'API) pour plus d'informations et réessayer l'envoi manuellement.\n\n";
         $message .= "Cordialement,\nLe Plugin Woo Google Ads Server-Side";

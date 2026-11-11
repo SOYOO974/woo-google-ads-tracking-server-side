@@ -15,6 +15,15 @@ $active_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'setting
             class="nav-tab <?php echo $active_tab == 'support' ? 'nav-tab-active' : ''; ?>">Support</a>
     </h2>
 
+    <?php if (class_exists('Woo_Gads_Api') && Woo_Gads_Api::is_validate_only()): ?>
+        <div class="notice notice-warning" style="border-left-color: #dba617;">
+            <p>
+                <strong><?php echo esc_html__('Test Mode (validateOnly) is active:', 'woo-gads-server-side'); ?></strong>
+                <?php echo esc_html__('Google Ads API validates every conversion request without recording conversions in your Google Ads account. Disable Test Mode in Configuration once your validation tests are complete.', 'woo-gads-server-side'); ?>
+            </p>
+        </div>
+    <?php endif; ?>
+
     <?php if (isset($_GET['oauth_success'])): ?>
         <div class="notice notice-success is-dismissible">
             <p>Connexion Google réussie ! Le Refresh Token a été mis à jour.</p>

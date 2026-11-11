@@ -304,7 +304,7 @@ $logs = Woo_Gads_Db::get_logs(50);
                         $wpgens_gclid = $order->get_meta('_wpgens_gclid') ?: ($order->get_meta('wpgens_gclid') ?: (get_post_meta($order_id, '_wpgens_gclid', true) ?: get_post_meta($order_id, 'wpgens_gclid', true)));
                         $ids = array_filter(array('GCLID' => $gclid, 'WBRAID' => $wbraid, 'GBRAID' => $gbraid));
 
-                        // API Status & Sent
+                        // API Status & Sent (Purchase)
                         $api_status = $order->get_meta('_gads_api_status');
                         if (empty($api_status)) {
                             $api_status = get_post_meta($order_id, '_gads_api_status', true);
@@ -315,11 +315,32 @@ $logs = Woo_Gads_Db::get_logs(50);
                         }
                         $ids_saved = $order->get_meta('_woo_gads_ids_saved');
 
+                        // Lead / Quote Status, Sent & Value
+                        $payment_method = method_exists($order, 'get_payment_method') ? (string) $order->get_payment_method() : '';
+                        $is_lead_order = Woo_Gads_Api::is_lead_order($order, $settings ?? array());
+                        $is_unpaid_lead = Woo_Gads_Api::is_unpaid_lead_order($order, $settings ?? array());
+                        $lead_enabled_cfg = Woo_Gads_Api::is_lead_conversion_enabled($settings ?? array());
+
+                        $lead_status = $order->get_meta('_gads_lead_status');
+                        if (empty($lead_status)) {
+                            $lead_status = get_post_meta($order_id, '_gads_lead_status', true);
+                        }
+                        $lead_sent = $order->get_meta('_gads_lead_sent');
+                        if (empty($lead_sent)) {
+                            $lead_sent = get_post_meta($order_id, '_gads_lead_sent', true);
+                        }
+                        $lead_value = $order->get_meta('_gads_lead_value');
+                        if ($lead_value === '' || $lead_value === null) {
+                            $lead_value = get_post_meta($order_id, '_gads_lead_value', true);
+                        }
+
                         if (empty($api_status)) {
                             if ($api_sent === '1') {
                                 $api_status = 'Succès (Legacy)';
                             } elseif (!empty($api_sent)) {
                                 $api_status = 'Erreur (Legacy)';
+                            } elseif ($is_unpaid_lead) {
+                                $api_status = 'Ignoré (devis, non payé)';
                             } else {
                                 $current_order_status = method_exists($order, 'get_status') ? $order->get_status() : '';
                                 $target_statuses = Woo_Gads_Api::get_target_statuses($settings ?? array());
@@ -361,12 +382,19 @@ $logs = Woo_Gads_Db::get_logs(50);
                         ?>
                         <tr>
                             <td>
-                                <strong>#<?php echo esc_html($order_id); ?></strong><br>
+                                <strong>#<?php echo esc_html($order_id); ?></strong>
+                                <?php if ($is_lead_order) : ?>
+                                    <span style="display:inline-block; margin-left:4px; padding:1px 6px; font-size:11px; font-weight:600; border-radius:3px; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe;"><?php echo esc_html__('Quote', 'woo-gads-server-side'); ?></span>
+                                <?php endif; ?>
+                                <br>
                                 <small><?php echo esc_html($formatted_date); ?></small>
                             </td>
                             <td>
                                 <?php 
                                 echo '<mark class="' . $status_class . '" style="background:transparent;"><span>' . esc_html($status_name) . '</span></mark>'; 
+                                if ($payment_method !== '') {
+                                    echo '<br><small style="color:#646970;"><code>' . esc_html($payment_method) . '</code></small>';
+                                }
                                 ?>
                             </td>
                             <td>
@@ -405,12 +433,39 @@ $logs = Woo_Gads_Db::get_logs(50);
                                     $status_color = '#d63638';
                                 }
                                 ?>
-                                <strong style="color: <?php echo esc_attr($status_color); ?>;"><?php echo esc_html($api_status); ?></strong>
-                                <div style="margin-top: 5px;">
-                                    <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($order_id); ?>">Renvoyer</button>
-                                    <button type="button" class="button button-small woo-gads-toggle-meta" data-target="meta-<?php echo esc_attr($order_id); ?>" style="margin-left: 4px;">Détails métas</button>
+                                <div>
+                                    <small style="color:#646970; font-weight:600;"><?php echo esc_html__('Purchase:', 'woo-gads-server-side'); ?></small>
+                                    <strong style="color: <?php echo esc_attr($status_color); ?>;"><?php echo esc_html($api_status); ?></strong>
+                                </div>
+                                <?php if ($is_lead_order || !empty($lead_status)) : ?>
+                                    <?php
+                                    $display_lead_status = !empty($lead_status) ? $lead_status : ($lead_enabled_cfg ? 'En attente (Non déclenché)' : 'Désactivé');
+                                    $lead_color = '#646970';
+                                    if (strpos($display_lead_status, 'Succès') !== false) {
+                                        $lead_color = '#1d4ed8';
+                                    } elseif (strpos($display_lead_status, 'En attente') !== false) {
+                                        $lead_color = '#dba617';
+                                    } elseif (strpos($display_lead_status, 'Échec') !== false || strpos($display_lead_status, 'Erreur') !== false) {
+                                        $lead_color = '#d63638';
+                                    }
+                                    ?>
+                                    <div style="margin-top: 3px;">
+                                        <small style="color:#1d4ed8; font-weight:600;"><?php echo esc_html__('Quote:', 'woo-gads-server-side'); ?></small>
+                                        <strong style="color: <?php echo esc_attr($lead_color); ?>;"><?php echo esc_html($display_lead_status); ?></strong>
+                                        <?php if ($lead_value !== '' && $lead_value !== null) : ?>
+                                            <small style="color:#50575e;">(<?php echo esc_html($lead_value); ?> €)</small>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
+                                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
+                                    <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($order_id); ?>" data-conversion-type="purchase"><?php echo esc_html__('Resend', 'woo-gads-server-side'); ?></button>
+                                    <?php if ($is_lead_order && $lead_enabled_cfg) : ?>
+                                        <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($order_id); ?>" data-conversion-type="lead"><?php echo esc_html__('Resend Quote', 'woo-gads-server-side'); ?></button>
+                                    <?php endif; ?>
+                                    <button type="button" class="button button-small woo-gads-toggle-meta" data-target="meta-<?php echo esc_attr($order_id); ?>"><?php echo esc_html__('Meta details', 'woo-gads-server-side'); ?></button>
                                 </div>
                                 <div id="meta-<?php echo esc_attr($order_id); ?>" style="display:none; margin-top:8px; padding:8px 10px; background:#f6f7f7; border:1px solid #dcdcde; border-radius:4px; font-family:monospace; font-size:11px; text-align:left; line-height:1.6;">
+                                    <div><strong>_payment_method :</strong> <?php echo esc_html($payment_method ?: '(vide)'); ?></div>
                                     <div><strong>_woo_gads_gclid :</strong> <?php echo esc_html($gclid ?: '(vide)'); ?></div>
                                     <div><strong>_gclid :</strong> <?php echo esc_html($raw_gclid_meta ?: '(vide)'); ?></div>
                                     <div><strong>_gads_gclid :</strong> <?php echo esc_html($gads_gclid_meta ?: '(vide)'); ?></div>
@@ -422,6 +477,9 @@ $logs = Woo_Gads_Db::get_logs(50);
                                     <div><strong>_woo_gads_consent :</strong> <?php echo esc_html($consent ?: '(vide)'); ?></div>
                                     <div><strong>_gads_api_status :</strong> <?php echo esc_html($api_status ?: '(vide)'); ?></div>
                                     <div><strong>_gads_api_sent :</strong> <?php echo esc_html($api_sent ?: '(vide)'); ?></div>
+                                    <div><strong>_gads_lead_status :</strong> <?php echo esc_html($lead_status ?: '(vide)'); ?></div>
+                                    <div><strong>_gads_lead_sent :</strong> <?php echo esc_html($lead_sent ?: '(vide)'); ?></div>
+                                    <div><strong>_gads_lead_value :</strong> <?php echo esc_html($lead_value !== '' ? $lead_value : '(vide)'); ?></div>
                                     <div><strong>_woo_gads_ids_saved :</strong> <?php echo esc_html($ids_saved ?: '(vide)'); ?></div>
                                 </div>
                             </td>
@@ -479,20 +537,28 @@ $logs = Woo_Gads_Db::get_logs(50);
                 <th style="width: 50px;">ID</th>
                 <th style="width: 150px;">Date</th>
                 <th style="width: 80px;">Order ID</th>
-                <th style="width: 80px;">HTTP</th>
+                <th style="width: 90px;"><?php echo esc_html__('Type', 'woo-gads-server-side'); ?></th>
+                <th style="width: 70px;">HTTP</th>
                 <th>Statut &amp; Consentement</th>
                 <th>Payload</th>
                 <th>Réponse API</th>
-                <th style="width: 100px;">Action</th>
+                <th style="width: 130px;">Action</th>
             </tr>
         </thead>
         <tbody>
             <?php if (empty($logs)): ?>
                 <tr>
-                    <td colspan="8">Aucune requête enregistrée pour le moment.</td>
+                    <td colspan="9">Aucune requête enregistrée pour le moment.</td>
                 </tr>
             <?php else: ?>
                 <?php foreach ($logs as $log): ?>
+                    <?php
+                    $payload_str = is_string($log->payload) ? $log->payload : wp_json_encode($log->payload);
+                    $row_action_type = !empty($log->action_type) ? $log->action_type : ((strpos((string) $payload_str, 'devis-') !== false) ? 'lead' : 'purchase');
+                    $is_lead_row = ($row_action_type === 'lead');
+                    $log_order_obj = function_exists('wc_get_order') ? wc_get_order($log->order_id) : null;
+                    $order_edit_url = ($log_order_obj && method_exists($log_order_obj, 'get_edit_order_url')) ? $log_order_obj->get_edit_order_url() : get_edit_post_link($log->order_id);
+                    ?>
                     <tr>
                         <td>
                             <?php echo esc_html($log->id); ?>
@@ -500,9 +566,20 @@ $logs = Woo_Gads_Db::get_logs(50);
                         <td>
                             <?php echo esc_html($log->time); ?>
                         </td>
-                        <td><a href="<?php echo get_edit_post_link($log->order_id); ?>">#
-                                <?php echo esc_html($log->order_id); ?>
-                            </a></td>
+                        <td>
+                            <?php if (!empty($order_edit_url)): ?>
+                                <a href="<?php echo esc_url($order_edit_url); ?>">#<?php echo esc_html($log->order_id); ?></a>
+                            <?php else: ?>
+                                #<?php echo esc_html($log->order_id); ?>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if ($is_lead_row): ?>
+                                <span style="display:inline-block; padding:2px 8px; font-size:11px; font-weight:600; border-radius:3px; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe;"><?php echo esc_html__('Quote', 'woo-gads-server-side'); ?></span>
+                            <?php else: ?>
+                                <span style="display:inline-block; padding:2px 8px; font-size:11px; font-weight:600; border-radius:3px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;"><?php echo esc_html__('Purchase', 'woo-gads-server-side'); ?></span>
+                            <?php endif; ?>
+                        </td>
                         <td>
                             <?php
                             if ($log->http_status >= 200 && $log->http_status < 300) {
@@ -527,14 +604,19 @@ $logs = Woo_Gads_Db::get_logs(50);
                         </td>
                         <td>
                             <textarea readonly rows="2"
-                                style="width:100%; font-size:10px;"><?php echo esc_textarea(is_string($log->payload) ? $log->payload : json_encode($log->payload)); ?></textarea>
+                                style="width:100%; font-size:10px;"><?php echo esc_textarea($payload_str); ?></textarea>
                         </td>
                         <td>
                             <textarea readonly rows="2"
                                 style="width:100%; font-size:10px;"><?php echo esc_textarea(is_string($log->response) ? $log->response : json_encode($log->response)); ?></textarea>
                         </td>
                         <td>
-                            <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($log->order_id); ?>">Renvoyer</button>
+                            <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+                                <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($log->order_id); ?>" data-conversion-type="purchase"><?php echo esc_html__('Resend', 'woo-gads-server-side'); ?></button>
+                                <?php if ($is_lead_row): ?>
+                                    <button type="button" class="button button-small woo-gads-retry-btn" data-order-id="<?php echo esc_attr($log->order_id); ?>" data-conversion-type="lead"><?php echo esc_html__('Resend Quote', 'woo-gads-server-side'); ?></button>
+                                <?php endif; ?>
+                            </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -549,6 +631,7 @@ jQuery(document).ready(function ($) {
         e.preventDefault();
         var btn = $(this);
         var orderId = btn.data('order-id');
+        var convType = btn.data('conversion-type') || 'purchase';
         var originalText = btn.text();
         
         if (!confirm('Voulez-vous vraiment forcer le renvoi de cette conversion à Google Ads ?')) {
@@ -560,6 +643,7 @@ jQuery(document).ready(function ($) {
         $.post(ajaxurl, {
             action: 'woo_gads_retry_conversion',
             order_id: orderId,
+            conversion_type: convType,
             _ajax_nonce: '<?php echo wp_create_nonce("woo_gads_retry"); ?>'
         }, function(response) {
             btn.prop('disabled', false).text(originalText);
@@ -613,13 +697,16 @@ jQuery(document).ready(function ($) {
                 var html = '<strong>Rapport de rattrapage terminé (' + d.days + ' derniers jours) :</strong><br>';
                 html += '<ul style="margin: 8px 0 8px 20px; list-style: square;">';
                 html += '<li><strong>Commandes analysées :</strong> ' + d.total_inspected + '</li>';
-                html += '<li><span style="color:#00a32a;">✅ Déjà envoyées auparavant (inchangées) :</span> ' + d.already_sent + '</li>';
-                html += '<li><span style="color:#2271b1; font-weight:bold;">🚀 Conversions rattrapées & envoyées avec succès :</span> ' + d.rescued_success + '</li>';
+                html += '<li><span style="color:#00a32a;">Déjà envoyées auparavant (inchangées) :</span> ' + d.already_sent + '</li>';
+                html += '<li><span style="color:#2271b1; font-weight:bold;">Conversions rattrapées & envoyées avec succès :</span> ' + d.rescued_success + (d.lead_rescued_success > 0 ? ' (dont ' + d.lead_rescued_success + ' devis)' : '') + '</li>';
+                if (d.skipped_unpaid_leads > 0) {
+                    html += '<li><span style="color:#1d4ed8;">Devis non payés protégés (Verrou Achats actif) :</span> ' + d.skipped_unpaid_leads + '</li>';
+                }
                 if (d.skipped_expired > 0) {
-                    html += '<li><span style="color:#646970;">⌛ Clics expirés (hors fenêtre de conversion Google Ads) :</span> ' + d.skipped_expired + '<br><small style="color:#646970; margin-left: 15px;">Clics publicitaires antérieurs à la fenêtre d\'attribution configurée dans Google Ads (marqués comme résolus pour éviter tout renvoi parasite).</small></li>';
+                    html += '<li><span style="color:#646970;">Clics expirés (hors fenêtre de conversion Google Ads) :</span> ' + d.skipped_expired + '<br><small style="color:#646970; margin-left: 15px;">Clics publicitaires antérieurs à la fenêtre d\'attribution configurée dans Google Ads (marqués comme résolus pour éviter tout renvoi parasite).</small></li>';
                 }
                 if (d.rescued_failed > 0) {
-                    html += '<li><span style="color:#d63638; font-weight:bold;">❌ Échecs d\'envoi API :</span> ' + d.rescued_failed + '</li>';
+                    html += '<li><span style="color:#d63638; font-weight:bold;">Échecs d\'envoi API :</span> ' + d.rescued_failed + '</li>';
                 }
 
                 var breakdownStr = '';

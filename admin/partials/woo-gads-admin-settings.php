@@ -3,6 +3,7 @@ $settings = get_option('woo_gads_settings');
 ?>
 <form method="post" action="options.php">
     <?php settings_fields('woo_gads_options'); ?>
+    <input type="hidden" name="woo_gads_settings[_from_settings_form]" value="1" />
 
     <table class="form-table">
         <tr>
@@ -323,6 +324,124 @@ $settings = get_option('woo_gads_settings');
                     </label>
                 <?php endforeach; ?>
                 <p class="description">L'API Google Ads sera contactée dès que la commande atteint <strong>au moins l'un de ces statuts</strong>. Si la commande transite par plusieurs de ces statuts (ex: « En cours » puis « Terminée »), le garde-fou anti-doublon garantit qu'elle n'est envoyée qu'une seule fois.</p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><?php echo esc_html__('Quote / Lead Payment Methods (Purchase Lock)', 'woo-gads-server-side'); ?></th>
+            <td>
+                <?php
+                $lead_methods_list = Woo_Gads_Api::get_lead_payment_methods(is_array($settings) ? $settings : array());
+                $lead_methods_str = implode(', ', $lead_methods_list);
+                $detected_gateways = array();
+                if (function_exists('WC') && WC()->payment_gateways()) {
+                    $all_gateways = WC()->payment_gateways()->payment_gateways();
+                    if (is_array($all_gateways)) {
+                        foreach ($all_gateways as $gw_id => $gw_obj) {
+                            $gw_title = method_exists($gw_obj, 'get_title') ? wp_strip_all_tags((string) $gw_obj->get_title()) : $gw_id;
+                            $detected_gateways[] = $gw_id . ($gw_title !== '' && $gw_title !== $gw_id ? ' (' . $gw_title . ')' : '');
+                        }
+                    }
+                }
+                ?>
+                <input type="text" name="woo_gads_settings[lead_payment_methods]" id="woo_gads_lead_payment_methods"
+                    value="<?php echo esc_attr($lead_methods_str); ?>" class="regular-text"
+                    placeholder="we_quote_request" />
+                <p class="description" style="margin-top: 5px;">
+                    <?php echo esc_html__('Comma-separated WooCommerce payment gateway IDs representing quote or lead requests (default: we_quote_request). Any order placed with one of these gateways will NEVER trigger the Purchase conversion action—even if "On hold" is enabled or manual resend is clicked—unless the order is genuinely paid (is_paid() or payment date set).', 'woo-gads-server-side'); ?>
+                </p>
+                <?php if (!empty($detected_gateways)) : ?>
+                    <p class="description" style="margin-top: 4px; font-size: 12px; color: #646970;">
+                        <strong><?php echo esc_html__('Detected payment gateways:', 'woo-gads-server-side'); ?></strong>
+                        <code><?php echo esc_html(implode(' | ', $detected_gateways)); ?></code>
+                    </p>
+                <?php endif; ?>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><?php echo esc_html__('Quote Request Conversion ("Demande de devis")', 'woo-gads-server-side'); ?></th>
+            <td>
+                <?php
+                $lead_enabled = !empty($settings['enable_lead_conversion']) && (string) $settings['enable_lead_conversion'] !== '0';
+                $lead_action_id_val = $settings['lead_conversion_action_id'] ?? '';
+                $lead_ratio_val = isset($settings['lead_value_ratio']) && trim((string) $settings['lead_value_ratio']) !== '' ? $settings['lead_value_ratio'] : '0.25';
+                $lead_cap_val = isset($settings['lead_value_cap']) && trim((string) $settings['lead_value_cap']) !== '' ? $settings['lead_value_cap'] : '750';
+                $lead_statuses_selected = Woo_Gads_Api::get_lead_target_statuses(is_array($settings) ? $settings : array());
+                $available_lead_statuses = array(
+                    'on-hold' => __('On hold (En attente)', 'woo-gads-server-side'),
+                    'pending' => __('Pending payment (Attente paiement)', 'woo-gads-server-side'),
+                );
+                ?>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                    <input type="checkbox" name="woo_gads_settings[enable_lead_conversion]" id="woo_gads_enable_lead_conversion" value="1" <?php checked($lead_enabled); ?> />
+                    <strong><?php echo esc_html__('Enable dedicated Google Ads conversion tracking for quote requests', 'woo-gads-server-side'); ?></strong>
+                </label>
+                <p class="description" style="margin-top: 5px;">
+                    <?php echo esc_html__('Sends quote orders matching the payment methods above to a separate Google Ads Lead conversion action with orderId "devis-{order_id}" and a weighted/capped value, without affecting Purchase metas (_gads_api_sent). If a quote is later paid, the full real sale is sent to the Purchase action.', 'woo-gads-server-side'); ?>
+                </p>
+
+                <div id="woo-gads-lead-options" style="margin-top: 15px; padding: 15px; background: #f6f7f7; border: 1px solid #dcdcde; border-radius: 4px; border-left: 4px solid #2271b1; <?php echo $lead_enabled ? '' : 'display:none;'; ?>">
+                    <div style="margin-bottom: 14px;">
+                        <label for="woo_gads_lead_conversion_action_id"><strong><?php echo esc_html__('Quote Conversion Action ID:', 'woo-gads-server-side'); ?></strong></label><br>
+                        <input type="text" name="woo_gads_settings[lead_conversion_action_id]" id="woo_gads_lead_conversion_action_id"
+                            value="<?php echo esc_attr($lead_action_id_val); ?>" class="regular-text" style="margin-top: 4px; max-width: 420px; width: 100%;"
+                            placeholder="ex: 7012345678 ou customers/1234567890/conversionActions/7012345678" />
+                        <p class="description" style="margin-top: 4px;">
+                            <?php echo esc_html__('Accepts either the numeric Conversion Action ID or the full Google Ads resource name (Import > Click conversions, category "Request quote").', 'woo-gads-server-side'); ?>
+                        </p>
+                    </div>
+
+                    <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 14px;">
+                        <div>
+                            <label for="woo_gads_lead_value_ratio"><strong><?php echo esc_html__('Value Ratio (0 to 1):', 'woo-gads-server-side'); ?></strong></label><br>
+                            <input type="number" step="0.01" min="0" max="10" name="woo_gads_settings[lead_value_ratio]" id="woo_gads_lead_value_ratio"
+                                value="<?php echo esc_attr($lead_ratio_val); ?>" class="small-text" style="margin-top: 4px; width: 110px;" />
+                            <p class="description" style="margin-top: 3px;"><?php echo esc_html__('Default: 0.25 (25% of order total incl. tax)', 'woo-gads-server-side'); ?></p>
+                        </div>
+                        <div>
+                            <label for="woo_gads_lead_value_cap"><strong><?php echo esc_html__('Maximum Value Cap (EUR):', 'woo-gads-server-side'); ?></strong></label><br>
+                            <input type="number" step="0.01" min="0" name="woo_gads_settings[lead_value_cap]" id="woo_gads_lead_value_cap"
+                                value="<?php echo esc_attr($lead_cap_val); ?>" class="small-text" style="margin-top: 4px; width: 130px;" />
+                            <p class="description" style="margin-top: 3px;"><?php echo esc_html__('Default: 750 € — Formula: min(Total TTC × Ratio, Cap)', 'woo-gads-server-side'); ?></p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <strong><?php echo esc_html__('Quote Trigger Statuses:', 'woo-gads-server-side'); ?></strong>
+                        <div style="margin-top: 6px;">
+                            <?php foreach ($available_lead_statuses as $l_status_key => $l_status_label) : ?>
+                                <label style="display: inline-block; margin-right: 20px; margin-bottom: 6px;">
+                                    <input type="checkbox" name="woo_gads_settings[lead_order_statuses][]" value="<?php echo esc_attr($l_status_key); ?>" <?php checked(in_array($l_status_key, $lead_statuses_selected, true)); ?> />
+                                    <?php echo esc_html($l_status_label); ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
+
+                <script type="text/javascript">
+                    (function ($) {
+                        $('#woo_gads_enable_lead_conversion').on('change', function () {
+                            if ($(this).is(':checked')) {
+                                $('#woo-gads-lead-options').slideDown(200);
+                            } else {
+                                $('#woo-gads-lead-options').slideUp(200);
+                            }
+                        });
+                    })(jQuery);
+                </script>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row"><?php echo esc_html__('API Test Mode (validateOnly)', 'woo-gads-server-side'); ?></th>
+            <td>
+                <?php $validate_only_checked = !empty($settings['validate_only']) && (string) $settings['validate_only'] !== '0'; ?>
+                <label style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" name="woo_gads_settings[validate_only]" value="1" <?php checked($validate_only_checked); ?> />
+                    <strong><?php echo esc_html__('Enable validateOnly mode (validate payloads without recording conversions in Google Ads)', 'woo-gads-server-side'); ?></strong>
+                </label>
+                <p class="description" style="margin-top: 5px;">
+                    <?php echo esc_html__('Adds "validateOnly": true to uploadClickConversions requests. Ideal for testing Purchase and Quote flows in local/staging environments before going live.', 'woo-gads-server-side'); ?>
+                </p>
             </td>
         </tr>
         <tr>

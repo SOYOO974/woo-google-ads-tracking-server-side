@@ -2,9 +2,9 @@
 Contributors: SOYOO
 Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
-Tested up to: 6.4
+Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.5.6
+Stable tag: 1.6.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,14 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.6.0 =
+* Verrou anti-faux achats sur les devis (« Verrou A ») : Nouveau réglage « Moyens de paiement de type devis / lead » (par défaut `we_quote_request`, filtrable via `woo_gads_lead_payment_methods`). Toute commande utilisant l'un de ces moyens de paiement ne déclenche plus JAMAIS l'action Achats — quel que soit son statut (`on-hold`, `processing`, `completed`) et même avec un renvoi manuel forcé (`$force = true`) — sauf si la commande est réellement payée (`$order->is_paid()` ou `get_date_paid()` non nul). Statut enregistré : `Ignoré (devis, non payé)` sans jamais altérer `_gads_api_sent`.
+* Nouvelle action de conversion Server-Side « Demande de devis » (Lead) : Envoi dédié des demandes de devis vers une action de conversion distincte dans Google Ads (ID numérique ou resource name complet `customers/.../conversionActions/...`), déclenché à priorité >= 20 après l'enregistrement des click IDs (`woocommerce_checkout_order_processed`, `woocommerce_new_order`, `woocommerce_store_api_checkout_update_order_meta`, `woocommerce_order_status_on-hold`, `woocommerce_order_status_pending`).
+* Valorisation pondérée & plafonnée des devis : Calcul automatique `conversionValue = round(min(Total TTC × Ratio, Plafond), 2)` (ratio par défaut `0.25`, plafond par défaut `750 €`), `orderId = "devis-{order_id}"` anti-collision et métas isolées (`_gads_lead_sent`, `_gads_lead_status`, `_gads_lead_value`). Si un devis est réglé ultérieurement, l'action Achats part normalement au montant total réel sans renvoyer le lead.
+* Logs, Audit & Rattrapage enrichis : Nouvelle colonne `action_type` (`Achat` / `Devis`) dans `wp_woo_gads_logs`, double affichage des statuts Achat / Devis et boutons dédiés « Renvoyer » / « Renvoyer devis » dans l'audit des commandes, et prise en charge des devis non envoyés dans le scanner de rattrapage rétroactif (`batch_rescue_orders`).
+* Robustesse & Mode test API (`validateOnly`) : Ajout du réglage `validateOnly` injectant `"validateOnly": true` dans `uploadClickConversions` (avec bandeau d'avertissement global dans l'admin) et du filtre de garde d'environnement `woo_gads_is_production` (défaut `true`).
+* Internationalisation complète (`fr_FR`) & Ergonomie Admin : Ajout du catalogue `.pot` et des traductions compilées `fr_FR` (`.po`, `.mo`, `.l10n.php` compatibles WordPress 6.5+ et Loco Translate), lien rapide « Réglages » dans la liste des extensions et bouclier anti-403 `option_page_capability_woo_gads_options`.
 
 = 1.5.6 =
 * Correctif critique HPOS (Erreur 500 `WC_Order_Factory::get_orders` à la mise à jour) : Report de l'exécution de `Woo_Gads_Db::maybe_upgrade()` et `backfill_recent_orders()` sur un hook dédié `init` à la priorité `20` (strictement après `WC_Post_Types::register_post_types` exécuté à `init` priorité `5`), avec vérification explicite de `did_action('woocommerce_after_register_post_type')` et `wc_get_order_type('shop_order')`.

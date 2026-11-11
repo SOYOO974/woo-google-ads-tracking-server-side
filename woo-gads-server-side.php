@@ -3,7 +3,7 @@
  * Plugin Name:       Woo Google Ads Server-Side Tracking
  * Plugin URI:        https://example.com
  * Description:       Envoi des conversions WooCommerce à l'API Google Ads en server-side, respectant le consentement.
- * Version:           1.5.6
+ * Version:           1.6.0
  * Author:            SOYOO
  * Text Domain:       woo-gads-server-side
  * Domain Path:       /languages
@@ -14,9 +14,30 @@ if (!defined('WPINC')) {
 	die;
 }
 
-define('WOO_GADS_VERSION', '1.5.6');
+define('WOO_GADS_VERSION', '1.6.0');
 define('WOO_GADS_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WOO_GADS_PLUGIN_URL', plugin_dir_url(__FILE__));
+
+/**
+ * Load plugin translations with priority to Loco Translate custom directory
+ * (wp-content/languages/loco/plugins/) before falling back to bundled /languages/.
+ */
+function woo_gads_load_textdomain()
+{
+	$domain = 'woo-gads-server-side';
+	$locale = function_exists('determine_locale') ? determine_locale() : get_locale();
+	$locale = apply_filters('plugin_locale', $locale, $domain);
+
+	if (defined('WP_LANG_DIR')) {
+		$loco_mofile = WP_LANG_DIR . '/loco/plugins/' . $domain . '-' . $locale . '.mo';
+		if (file_exists($loco_mofile)) {
+			load_textdomain($domain, $loco_mofile);
+		}
+	}
+
+	load_plugin_textdomain($domain, false, dirname(plugin_basename(__FILE__)) . '/languages');
+}
+add_action('init', 'woo_gads_load_textdomain', 1);
 
 // Initialize the Plugin Update Checker
 require_once WOO_GADS_PLUGIN_DIR . 'plugin-update-checker/plugin-update-checker.php';

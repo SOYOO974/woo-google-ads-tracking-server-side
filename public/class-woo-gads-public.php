@@ -408,7 +408,7 @@ function gtag(){dataLayer.push(arguments);}
     public function render_cookie_settings_shortcode($atts = array())
     {
         $atts = shortcode_atts(array(
-            'text'  => __('Gestion des cookies', 'woo-gads-server-side'),
+            'text'  => __('Cookie Settings', 'woo-gads-server-side'),
             'class' => '',
             'tag'   => 'a',
         ), $atts, 'woo_gads_cookie_settings');
@@ -443,7 +443,7 @@ function gtag(){dataLayer.push(arguments);}
                 strpos($opt, 'woo-gads-reopen-consent') === false &&
                 strpos($opt, '#woo-gads-cookies') === false
             ) {
-                $opt .= ' <span class="confo-footer-sep" style="margin: 0 8px; opacity: 0.5;">•</span> [woo_gads_cookie_settings text="' . esc_attr__('Gérer mes cookies', 'woo-gads-server-side') . '"]';
+                $opt .= ' <span class="confo-footer-sep" style="margin: 0 8px; opacity: 0.5;">•</span> [woo_gads_cookie_settings text="' . esc_attr__('Manage my cookies', 'woo-gads-server-side') . '"]';
             }
         }
 

@@ -14,6 +14,7 @@ class Woo_Gads_Activator
 			id mediumint(9) NOT NULL AUTO_INCREMENT,
 			time datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
 			order_id bigint(20) NOT NULL,
+			action_type varchar(20) DEFAULT 'purchase' NOT NULL,
 			http_status smallint(5) NOT NULL,
 			status varchar(32) DEFAULT 'success' NOT NULL,
 			message text NOT NULL,

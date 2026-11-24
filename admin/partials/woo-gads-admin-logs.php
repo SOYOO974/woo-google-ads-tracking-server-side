@@ -371,7 +371,10 @@ $logs = Woo_Gads_Db::get_logs(50);
                         // Customer Data
                         $email = method_exists($order, 'get_billing_email') ? $order->get_billing_email() : '';
                         $phone = method_exists($order, 'get_billing_phone') ? $order->get_billing_phone() : '';
-                        $has_data = (!empty($email) && !empty($phone));
+                        $country = method_exists($order, 'get_billing_country') ? $order->get_billing_country() : '';
+                        $postcode = method_exists($order, 'get_billing_postcode') ? $order->get_billing_postcode() : '';
+                        $e164_phone = Woo_Gads_Api::normalize_phone_e164($phone, $country, $postcode);
+                        $has_data = (!empty($email) || $e164_phone !== '');
 
                         $date_obj = method_exists($order, 'get_date_created') ? $order->get_date_created() : null;
                         $formatted_date = ($date_obj && method_exists($date_obj, 'date')) ? $date_obj->date('d/m/Y H:i') : '';
@@ -414,16 +417,22 @@ $logs = Woo_Gads_Db::get_logs(50);
                             <td>
                                 <?php
                                 if ($has_data) {
-                                    echo '<span style="color:#00a32a;">Prêtes pour le hachage</span>';
+                                    if (!empty($email) && $e164_phone !== '') {
+                                        echo '<span style="color:#00a32a;">Prêtes pour le hachage (Email + E.164)</span>';
+                                    } elseif (!empty($email)) {
+                                        echo '<span style="color:#00a32a;">Prêtes (Email seul' . (!empty($phone) ? ' — Tél non E.164' : '') . ')</span>';
+                                    } else {
+                                        echo '<span style="color:#00a32a;">Prêtes (Tél E.164 seul)</span>';
+                                    }
                                 } else {
-                                    echo '<span style="color:#d63638;">Manquantes (' . (empty($email) ? 'Email ' : '') . (empty($phone) ? 'Tel' : '') . ')</span>';
+                                    echo '<span style="color:#d63638;">Manquantes (Email &amp; Tél E.164)</span>';
                                 }
                                 ?>
                             </td>
                             <td>
                                 <?php
                                 $status_color = '#1d2327';
-                                if (strpos($api_status, 'Succès') !== false) {
+                                if (strpos($api_status, 'Succès') !== false || strpos($api_status, 'Envoyé') !== false) {
                                     $status_color = '#00a32a';
                                 } elseif (strpos($api_status, 'Ignoré') !== false) {
                                     $status_color = '#646970';
@@ -441,7 +450,7 @@ $logs = Woo_Gads_Db::get_logs(50);
                                     <?php
                                     $display_lead_status = !empty($lead_status) ? $lead_status : ($lead_enabled_cfg ? 'En attente (Non déclenché)' : 'Désactivé');
                                     $lead_color = '#646970';
-                                    if (strpos($display_lead_status, 'Succès') !== false) {
+                                    if (strpos($display_lead_status, 'Succès') !== false || strpos($display_lead_status, 'Envoyé') !== false) {
                                         $lead_color = '#1d4ed8';
                                     } elseif (strpos($display_lead_status, 'En attente') !== false) {
                                         $lead_color = '#dba617';
@@ -597,6 +606,8 @@ $logs = Woo_Gads_Db::get_logs(50);
                                 echo '<span style="color:#d63638; font-weight:bold;">Erreur :</span> ' . esc_html($log->error);
                             } elseif ($row_status === 'ignored') {
                                 echo '<span style="color:#646970; font-weight:bold;">Ignoré :</span> ' . esc_html($row_msg ?: 'Ignoré');
+                            } elseif (strpos($row_msg, 'Envoyé (sans click ID') === 0) {
+                                echo '<span style="color:#00a32a; font-weight:bold;">Envoyé :</span> ' . esc_html($row_msg);
                             } else {
                                 echo '<span style="color:#00a32a; font-weight:bold;">Succès :</span> ' . esc_html($row_msg ?: 'Envoi réussi');
                             }

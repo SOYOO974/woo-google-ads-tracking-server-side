@@ -82,6 +82,7 @@ class Woo_Gads_Admin
                 'enable_builtin_banner',
                 'enable_email_alerts',
                 'enable_lead_conversion',
+                'send_without_click_id',
                 'validate_only',
             );
             foreach ($checkbox_keys as $cb_key) {
@@ -222,7 +223,7 @@ class Woo_Gads_Admin
 
             if (!empty($result['status']) && $result['status'] === 'lead_disabled') {
                 wp_send_json_error(__('Quote / Lead conversion tracking is currently disabled in plugin settings.', 'woo-gads-server-side'));
-            } elseif (strpos($new_status, 'Succès') !== false || strpos($new_status, 'Ignoré') !== false) {
+            } elseif (strpos($new_status, 'Succès') !== false || strpos($new_status, 'Envoyé') !== false || strpos($new_status, 'Ignoré') !== false) {
                 wp_send_json_success($new_status);
             } else {
                 wp_send_json_error($new_status ?: __('Unknown status', 'woo-gads-server-side'));
@@ -257,7 +258,7 @@ class Woo_Gads_Admin
             $new_status = get_post_meta($order_id, '_gads_api_status', true);
         }
 
-        if (strpos($new_status, 'Succès') !== false) {
+        if (strpos($new_status, 'Succès') !== false || strpos($new_status, 'Envoyé') !== false) {
             wp_send_json_success($new_status);
         } elseif (strpos($new_status, 'Ignoré') !== false) {
             wp_send_json_success($new_status);

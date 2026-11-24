@@ -384,6 +384,160 @@ class Woo_Gads_Api
     }
 
     /**
+     * Check whether sending conversions without a click ID (Enhanced Conversions for Leads) is explicitly enabled.
+     * Disabled by default to prevent cross-channel over-attribution unless intentionally activated per site.
+     *
+     * @param array|null $settings
+     * @return bool
+     */
+    public static function is_send_without_click_id_enabled($settings = null)
+    {
+        if ($settings === null) {
+            $settings = get_option('woo_gads_settings', array());
+        }
+        $enabled = is_array($settings) && !empty($settings['send_without_click_id']) && (string) $settings['send_without_click_id'] !== '0';
+
+        return (bool) apply_filters('woo_gads_send_without_click_id', $enabled, $settings);
+    }
+
+    /**
+     * Normalize a raw phone number to strict E.164 format WITH leading '+' before SHA-256 hashing.
+     *
+     * Rules:
+     * - Strips spaces (including UTF-8 non-breaking spaces), dots, hyphens, and parentheses.
+     * - Already international (+XX... or 00XX...): kept as +XX... if valid E.164 (7 to 15 digits after '+').
+     * - Réunion / Mayotte ARCEP prefixes (0692, 0693, 0262, 0263, 0639, 0269) with RE/YT/FR/empty country or 974xx/976xx postcode -> +262 + 9 digits (NEVER confused with +33).
+     * - Other French Overseas DOM prefixes (0690, 0691, 0590 -> +590; 0696, 0697, 0596 -> +596; 0694, 0594 -> +594) guarded so they are never mapped to +33.
+     * - Metropolitan France (06, 07, 01-05, 09) with FR country -> +33 + 9 digits (and metropolitan 06/07 mobiles used in RE/YT -> +33).
+     * - Any unrecognized or malformed phone returns '' (omitted from userIdentifiers).
+     *
+     * @param mixed  $raw_phone Raw billing phone.
+     * @param string $country   Billing ISO-2 country code (e.g. 'RE', 'FR').
+     * @param string $postcode  Billing postal code (e.g. '97400').
+     * @return string Normalized E.164 phone starting with '+' or empty string if invalid.
+     */
+    public static function normalize_phone_e164($raw_phone, $country = '', $postcode = '')
+    {
+        if (!is_scalar($raw_phone)) {
+            return '';
+        }
+
+        $clean = str_replace(array("\xC2\xA0", "\xE2\x80\xAF"), '', trim((string) $raw_phone));
+        if ($clean === '') {
+            return '';
+        }
+
+        // Handle common "+33(0)6..." / "+262(0)692..." notation before stripping parentheses
+        $clean = preg_replace('/^(\+(?:33|262))\s*\(0\)/', '$1', $clean);
+        $clean = preg_replace('/[\s.\-()]+/', '', $clean);
+
+        if ($clean === '') {
+            return '';
+        }
+
+        // Convert 00 international dialing prefix to '+'
+        if (preg_match('/^00([1-9][0-9]{6,14})$/', $clean, $m)) {
+            $clean = '+' . $m[1];
+        }
+
+        // Already international (+XX...): keep unchanged if valid E.164
+        if (strpos($clean, '+') === 0) {
+            if (preg_match('/^\+2620((?:692|693|262|263|639|269)[0-9]{6})$/', $clean, $m_re)) {
+                return '+262' . $m_re[1];
+            }
+            if (preg_match('/^\+330([1-9][0-9]{8})$/', $clean, $m_fr)) {
+                if (preg_match('/^(?:692|693|262|263|639|269)[0-9]{6}$/', $m_fr[1])) {
+                    return '+262' . $m_fr[1];
+                }
+                return '+33' . $m_fr[1];
+            }
+            return preg_match('/^\+[1-9][0-9]{6,14}$/', $clean) ? $clean : '';
+        }
+
+        // National 10-digit French / Overseas format starting with 0
+        if (!preg_match('/^0[1-9][0-9]{8}$/', $clean)) {
+            return '';
+        }
+
+        $country_norm = strtoupper(trim((string) $country));
+        $zip_norm = preg_replace('/\s+/', '', trim((string) $postcode));
+
+        $is_re_or_yt = in_array($country_norm, array('RE', 'YT'), true) || (bool) preg_match('/^97[46]/', $zip_norm);
+        $is_fr = ($country_norm === 'FR');
+
+        // 1. La Réunion & Mayotte ARCEP blocks: NEVER confuse 0692/0693/0262/0263/0639/0269 with +33
+        if (preg_match('/^0(692|693|262|263|639|269)[0-9]{6}$/', $clean)) {
+            if ($is_re_or_yt || $is_fr || $country_norm === '') {
+                return '+262' . substr($clean, 1);
+            }
+            return '';
+        }
+
+        // 2. Other French Overseas DOM blocks: never misclassify as +33
+        if (preg_match('/^0(690|691|590)[0-9]{6}$/', $clean)) {
+            return (in_array($country_norm, array('GP', 'BL', 'MF', 'FR'), true) || preg_match('/^971/', $zip_norm))
+                ? ('+590' . substr($clean, 1))
+                : '';
+        }
+        if (preg_match('/^0(696|697|596)[0-9]{6}$/', $clean)) {
+            return (in_array($country_norm, array('MQ', 'FR'), true) || preg_match('/^972/', $zip_norm))
+                ? ('+596' . substr($clean, 1))
+                : '';
+        }
+        if (preg_match('/^0(694|594)[0-9]{6}$/', $clean)) {
+            return (in_array($country_norm, array('GF', 'FR'), true) || preg_match('/^973/', $zip_norm))
+                ? ('+594' . substr($clean, 1))
+                : '';
+        }
+
+        // 3. Metropolitan France: 06/07/01-05/09 + FR -> +33 (and metropolitan 06/07 mobiles used in RE/YT -> +33)
+        if ($is_fr && !$is_re_or_yt && preg_match('/^0[1-79][0-9]{8}$/', $clean)) {
+            return '+33' . substr($clean, 1);
+        }
+        if ($is_re_or_yt && preg_match('/^0[67][0-9]{8}$/', $clean)) {
+            return '+33' . substr($clean, 1);
+        }
+
+        return '';
+    }
+
+    /**
+     * Build FIRST_PARTY hashed contact identifiers (email & E.164 phone) for an order.
+     *
+     * @param \WC_Order $order
+     * @return array<int, array<string, string>>
+     */
+    public static function build_contact_user_identifiers($order)
+    {
+        $identifiers = array();
+        if (!$order || !is_a($order, 'WC_Order')) {
+            return $identifiers;
+        }
+
+        $email = method_exists($order, 'get_billing_email') ? strtolower(trim((string) $order->get_billing_email())) : '';
+        if ($email !== '' && strpos($email, '@') !== false) {
+            $identifiers[] = array(
+                'userIdentifierSource' => 'FIRST_PARTY',
+                'hashedEmail'          => hash('sha256', $email),
+            );
+        }
+
+        $phone = method_exists($order, 'get_billing_phone') ? (string) $order->get_billing_phone() : '';
+        $country = method_exists($order, 'get_billing_country') ? (string) $order->get_billing_country() : '';
+        $zip = method_exists($order, 'get_billing_postcode') ? (string) $order->get_billing_postcode() : '';
+        $e164_phone = self::normalize_phone_e164($phone, $country, $zip);
+
+        if ($e164_phone !== '') {
+            $identifiers[] = array(
+                'userIdentifierSource' => 'FIRST_PARTY',
+                'hashedPhoneNumber'    => hash('sha256', $e164_phone),
+            );
+        }
+
+        return $identifiers;
+    }
+
+    /**
      * Read an order meta value with HPOS + legacy postmeta fallback.
      *
      * @param \WC_Order $order
@@ -674,6 +828,7 @@ class Woo_Gads_Api
         $target_statuses = self::get_target_statuses($settings);
         $lead_enabled = self::is_lead_conversion_enabled($settings);
         $lead_target_statuses = self::get_lead_target_statuses($settings);
+        $allow_without_click_id = self::is_send_without_click_id_enabled($settings);
 
         // Fetch orders using WC_Order_Query
         $orders = wc_get_orders(array(
@@ -746,12 +901,19 @@ class Woo_Gads_Api
                 }
 
                 if (empty($click_ids)) {
-                    $curr_lead_status = self::get_order_meta_dual($order, $order_id, '_gads_lead_status');
-                    if ($curr_lead_status === '' || strpos($curr_lead_status, 'En attente') !== false) {
-                        self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
+                    $can_send_lead_no_click = false;
+                    if ($allow_without_click_id) {
+                        $lead_consent_check = $this->resolve_order_consent($order, $order_id, $settings);
+                        $can_send_lead_no_click = !empty($lead_consent_check['marketing_consent']) && !empty(self::build_contact_user_identifiers($order));
                     }
-                    $stats['skipped_no_click_id']++;
-                    continue;
+                    if (!$can_send_lead_no_click) {
+                        $curr_lead_status = self::get_order_meta_dual($order, $order_id, '_gads_lead_status');
+                        if ($curr_lead_status === '' || strpos($curr_lead_status, 'En attente') !== false) {
+                            self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
+                        }
+                        $stats['skipped_no_click_id']++;
+                        continue;
+                    }
                 }
 
                 // Reset failed lead marker (never touch _gads_api_sent!) and trigger lead conversion
@@ -776,11 +938,12 @@ class Woo_Gads_Api
                         $stats['rescued_success']++;
                         $stats['lead_rescued_success']++;
                         $val_suffix = ($new_lead_val !== '') ? ' - ' . $new_lead_val . ' €' : '';
+                        $source_label = !empty($click_ids) ? implode(', ', array_keys($click_ids)) : 'sans click ID, données hachées';
                         $stats['details'][] = array(
                             'order_id'    => $order_id,
                             'action_type' => 'lead',
                             'status'      => 'success',
-                            'message'     => '[Devis] Envoyé avec succès (' . implode(', ', array_keys($click_ids)) . $val_suffix . ')',
+                            'message'     => '[Devis] Envoyé avec succès (' . $source_label . $val_suffix . ')',
                         );
                     }
                 } else {
@@ -828,17 +991,24 @@ class Woo_Gads_Api
                 continue;
             }
 
-            // 3. If no click ID found -> Mark as Ignored (Non-Google Ads traffic)
+            // 3. If no click ID found -> Mark as Ignored unless send_without_click_id is active with consent + hashed contact
             if (empty($click_ids)) {
-                $current_status = self::get_order_meta_dual($order, $order_id, '_gads_api_status');
-                if ($current_status === '' || strpos($current_status, 'En attente') !== false) {
-                    self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+                $can_send_no_click = false;
+                if ($allow_without_click_id) {
+                    $consent_check = $this->resolve_order_consent($order, $order_id, $settings);
+                    $can_send_no_click = !empty($consent_check['marketing_consent']) && !empty(self::build_contact_user_identifiers($order));
                 }
-                $stats['skipped_no_click_id']++;
-                continue;
+                if (!$can_send_no_click) {
+                    $current_status = self::get_order_meta_dual($order, $order_id, '_gads_api_status');
+                    if ($current_status === '' || strpos($current_status, 'En attente') !== false) {
+                        self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+                    }
+                    $stats['skipped_no_click_id']++;
+                    continue;
+                }
             }
 
-            // 4. Click ID found & eligible status -> Rescue Purchase conversion
+            // 4. Eligible order -> Rescue Purchase conversion
             self::delete_order_meta_dual($order, $order_id, '_gads_api_sent');
 
             $this->trigger_conversion($order, true);
@@ -859,11 +1029,12 @@ class Woo_Gads_Api
                     );
                 } else {
                     $stats['rescued_success']++;
+                    $source_label = !empty($click_ids) ? implode(', ', array_keys($click_ids)) : 'sans click ID, données hachées';
                     $stats['details'][] = array(
                         'order_id'    => $order_id,
                         'action_type' => 'purchase',
                         'status'      => 'success',
-                        'message'     => '[Achat] Envoyée avec succès (' . implode(', ', array_keys($click_ids)) . ')',
+                        'message'     => '[Achat] Envoyée avec succès (' . $source_label . ')',
                     );
                 }
             } else {
@@ -1036,8 +1207,10 @@ class Woo_Gads_Api
         $gclid = self::get_order_click_id($order, 'gclid');
         $wbraid = self::get_order_click_id($order, 'wbraid');
         $gbraid = self::get_order_click_id($order, 'gbraid');
+        $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
+        $allow_without_click_id = self::is_send_without_click_id_enabled($settings);
 
-        if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
+        if (!$has_click_id && !$allow_without_click_id) {
             self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
             return array('success' => false, 'status' => 'skipped_no_click_id');
         }
@@ -1045,6 +1218,11 @@ class Woo_Gads_Api
         $consent_info = $this->resolve_order_consent($order, $order_id, $settings);
         $marketing_consent = $consent_info['marketing_consent'];
         $consent_log_msg = $consent_info['consent_log_msg'];
+
+        if (!$has_click_id && !$marketing_consent) {
+            self::update_order_meta_dual($order, $order_id, '_gads_api_status', 'Ignoré (Aucun identifiant de clic)');
+            return array('success' => false, 'status' => 'skipped_no_click_id_no_consent');
+        }
 
         $developer_token = isset($settings['developer_token']) ? trim((string) $settings['developer_token']) : '';
         $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['merchant_id']) : '';
@@ -1058,8 +1236,9 @@ class Woo_Gads_Api
 
         $validate_only = self::is_validate_only($settings, $order, 'purchase');
         $payload = $this->build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent, array(
-            'action_type'   => 'purchase',
-            'validate_only' => $validate_only,
+            'action_type'            => 'purchase',
+            'validate_only'          => $validate_only,
+            'allow_without_click_id' => $allow_without_click_id,
         ));
 
         if (!$payload) {
@@ -1149,8 +1328,10 @@ class Woo_Gads_Api
         $gclid = self::get_order_click_id($order, 'gclid');
         $wbraid = self::get_order_click_id($order, 'wbraid');
         $gbraid = self::get_order_click_id($order, 'gbraid');
+        $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
+        $allow_without_click_id = self::is_send_without_click_id_enabled($settings);
 
-        if (empty($gclid) && empty($wbraid) && empty($gbraid)) {
+        if (!$has_click_id && !$allow_without_click_id) {
             self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
             return array('success' => false, 'status' => 'skipped_no_click_id');
         }
@@ -1161,6 +1342,11 @@ class Woo_Gads_Api
         $consent_info = $this->resolve_order_consent($order, $order_id, $settings);
         $marketing_consent = $consent_info['marketing_consent'];
         $consent_log_msg = $consent_info['consent_log_msg'];
+
+        if (!$has_click_id && !$marketing_consent) {
+            self::update_order_meta_dual($order, $order_id, '_gads_lead_status', 'Ignoré (Aucun identifiant de clic)');
+            return array('success' => false, 'status' => 'skipped_no_click_id_no_consent');
+        }
 
         $developer_token = isset($settings['developer_token']) ? trim((string) $settings['developer_token']) : '';
         $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['merchant_id']) : '';
@@ -1174,10 +1360,11 @@ class Woo_Gads_Api
 
         $validate_only = self::is_validate_only($settings, $order, 'lead');
         $payload = $this->build_payload($order, $merchant_id, $lead_action_id, $marketing_consent, array(
-            'action_type'      => 'lead',
-            'conversion_value' => $lead_value,
-            'order_id_prefix'  => 'devis-',
-            'validate_only'    => $validate_only,
+            'action_type'            => 'lead',
+            'conversion_value'       => $lead_value,
+            'order_id_prefix'        => 'devis-',
+            'validate_only'          => $validate_only,
+            'allow_without_click_id' => $allow_without_click_id,
         ));
 
         if (!$payload) {
@@ -1207,6 +1394,8 @@ class Woo_Gads_Api
         $sent_meta_key = $is_lead ? '_gads_lead_sent' : '_gads_api_sent';
         $status_meta_key = $is_lead ? '_gads_lead_status' : '_gads_api_status';
         $mode_suffix = $validate_only ? ' [validateOnly]' : '';
+        $conv0 = isset($payload['conversions'][0]) && is_array($payload['conversions'][0]) ? $payload['conversions'][0] : array();
+        $payload_has_click_id = !empty($conv0['gclid']) || !empty($conv0['wbraid']) || !empty($conv0['gbraid']);
 
         $developer_token = isset($settings['developer_token']) ? trim((string) $settings['developer_token']) : '';
         $merchant_id = isset($settings['merchant_id']) ? preg_replace('/[^0-9]/', '', (string) $settings['merchant_id']) : '';
@@ -1289,9 +1478,9 @@ class Woo_Gads_Api
             }
 
             // 1. Resilient fallback: if Google Ads rejects userIdentifiers because Customer Data Terms are not yet accepted,
-            // immediately retry with Click ID only (GCLID/WBRAID/GBRAID) so zero conversion is lost.
+            // immediately retry with Click ID only (GCLID/WBRAID/GBRAID) when a Click ID is present so zero conversion is lost.
             $is_terms_error = (stripos($pf_msg, 'CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS') !== false || stripos($pf_msg, 'customer data processing terms') !== false);
-            if ($is_terms_error && !empty($payload['conversions'][0]['userIdentifiers'])) {
+            if ($payload_has_click_id && $is_terms_error && !empty($payload['conversions'][0]['userIdentifiers'])) {
                 $fallback_payload = $payload;
                 unset($fallback_payload['conversions'][0]['userIdentifiers']);
 
@@ -1328,6 +1517,55 @@ class Woo_Gads_Api
                 }
             }
 
+            // 1b. Resilient fallback: if an account ever rejects addressInfo on uploadClickConversions without click ID,
+            // retry immediately keeping hashedEmail / hashedPhoneNumber only.
+            $is_address_error = (stripos($pf_msg, 'address_info') !== false || stripos($pf_msg, 'addressInfo') !== false || stripos($pf_msg, 'UNSUPPORTED_USER_IDENTIFIER') !== false);
+            if ($is_address_error && !empty($payload['conversions'][0]['userIdentifiers']) && is_array($payload['conversions'][0]['userIdentifiers'])) {
+                $filtered_ids = array();
+                foreach ($payload['conversions'][0]['userIdentifiers'] as $uid) {
+                    if (is_array($uid) && !isset($uid['addressInfo'])) {
+                        $filtered_ids[] = $uid;
+                    }
+                }
+                if (!empty($filtered_ids) && count($filtered_ids) < count($payload['conversions'][0]['userIdentifiers'])) {
+                    $addr_fb_payload = $payload;
+                    $addr_fb_payload['conversions'][0]['userIdentifiers'] = $filtered_ids;
+
+                    $addr_fb_resp = wp_remote_post($url, array(
+                        'method'  => 'POST',
+                        'headers' => $headers,
+                        'body'    => wp_json_encode($addr_fb_payload),
+                        'timeout' => 20,
+                    ));
+
+                    if (!is_wp_error($addr_fb_resp)) {
+                        $addr_fb_code = (int) wp_remote_retrieve_response_code($addr_fb_resp);
+                        $addr_fb_body = wp_remote_retrieve_body($addr_fb_resp);
+                        $addr_fb_decoded = !empty($addr_fb_body) ? json_decode($addr_fb_body, true) : null;
+                        $addr_fb_2xx = ($addr_fb_code >= 200 && $addr_fb_code < 300);
+                        $addr_fb_partial = ($addr_fb_2xx && is_array($addr_fb_decoded) && !empty($addr_fb_decoded['partialFailureError']));
+
+                        if ($addr_fb_2xx && !$addr_fb_partial) {
+                            $ok_status = $payload_has_click_id ? ('Succès' . $mode_suffix) : ('Envoyé (sans click ID, données hachées)' . $mode_suffix);
+                            $ok_log = $payload_has_click_id
+                                ? ($consent_log_msg . $mode_suffix)
+                                : ('Envoyé (sans click ID, données hachées) - ' . $consent_log_msg . $mode_suffix);
+
+                            Woo_Gads_Db::insert_log($order_id, $addr_fb_code, $addr_fb_payload, $addr_fb_decoded, '', 'success', $ok_log, $action_type);
+                            if ($is_lead) {
+                                self::$leads_sent_in_request[$order_id] = true;
+                            } else {
+                                self::$purchases_sent_in_request[$order_id] = true;
+                            }
+                            self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
+                            self::update_order_meta_dual($order, $order_id, $status_meta_key, $ok_status);
+                            $this->check_consecutive_missing_cookies();
+                            return array('success' => true, 'status' => 'success');
+                        }
+                    }
+                }
+            }
+
             // 2. Expired click (prior to Google Ads conversion window)
             $is_click_window_expired = (
                 stripos($pf_msg, 'click-through window') !== false ||
@@ -1359,7 +1597,8 @@ class Woo_Gads_Api
                 stripos($pf_msg, 'already exists') !== false
             );
             if ($is_already_exists) {
-                $log_msg = $consent_log_msg . $mode_suffix . ' | Succès : Conversion déjà enregistrée dans Google Ads';
+                $exists_prefix = $payload_has_click_id ? '' : 'Envoyé (sans click ID, données hachées) - ';
+                $log_msg = $exists_prefix . $consent_log_msg . $mode_suffix . ' | Succès : Conversion déjà enregistrée dans Google Ads';
                 Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $log_msg, $action_type);
 
                 if ($is_lead) {
@@ -1368,7 +1607,10 @@ class Woo_Gads_Api
                     self::$purchases_sent_in_request[$order_id] = true;
                 }
                 self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
-                self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Succès (Déjà enregistrée dans Google Ads)' . $mode_suffix);
+                $exists_status = $payload_has_click_id
+                    ? ('Succès (Déjà enregistrée dans Google Ads)' . $mode_suffix)
+                    : ('Envoyé (sans click ID, données hachées)' . $mode_suffix);
+                self::update_order_meta_dual($order, $order_id, $status_meta_key, $exists_status);
 
                 $this->check_consecutive_missing_cookies();
                 return array('success' => true, 'status' => 'already_exists');
@@ -1407,7 +1649,14 @@ class Woo_Gads_Api
             return array('success' => false, 'status' => 'partial_failure_error', 'message' => $pf_msg);
         } elseif ($is_http_2xx) {
             // HTTP 2xx success: status = 'success', error = '' (empty) for WP Agent Bridge compatibility
-            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $consent_log_msg . $mode_suffix, $action_type);
+            $status_label = $payload_has_click_id
+                ? ('Succès' . $mode_suffix)
+                : ('Envoyé (sans click ID, données hachées)' . $mode_suffix);
+            $success_log_msg = $payload_has_click_id
+                ? ($consent_log_msg . $mode_suffix)
+                : ('Envoyé (sans click ID, données hachées) - ' . $consent_log_msg . $mode_suffix);
+
+            Woo_Gads_Db::insert_log($order_id, $http_status, $payload, $body_decoded, '', 'success', $success_log_msg, $action_type);
 
             if ($is_lead) {
                 self::$leads_sent_in_request[$order_id] = true;
@@ -1415,9 +1664,9 @@ class Woo_Gads_Api
                 self::$purchases_sent_in_request[$order_id] = true;
             }
             self::update_order_meta_dual($order, $order_id, $sent_meta_key, '1');
-            self::update_order_meta_dual($order, $order_id, $status_meta_key, 'Succès' . $mode_suffix);
+            self::update_order_meta_dual($order, $order_id, $status_meta_key, $status_label);
             $this->check_consecutive_missing_cookies();
-            return array('success' => true, 'status' => 'success');
+            return array('success' => true, 'status' => $payload_has_click_id ? 'success' : 'sent_without_click_id');
         } else {
             $error_details = 'Erreur API Google Ads (HTTP ' . $http_status . ').';
             if (!empty($body)) {
@@ -1454,14 +1703,15 @@ class Woo_Gads_Api
     /**
      * Build the Google Ads `uploadClickConversions` request payload for either a Purchase or a Lead/Quote.
      *
-     * CRITICAL RULE (Incident v1.3.0 / AGENTS.md): NEVER remove the `$has_click_id` guard.
-     * Conversions without GCLID, WBRAID, or GBRAID must never be sent to avoid 100% revenue/lead over-attribution.
+     * By default (`allow_without_click_id = false`), conversions without GCLID, WBRAID, or GBRAID are rejected (`false`).
+     * When `allow_without_click_id = true` (explicitly enabled per site), conversions without a click ID are built ONLY
+     * if `$marketing_consent === true` AND at least one hashed contact identifier (`hashedEmail` or E.164 `hashedPhoneNumber`) exists.
      *
      * @param \WC_Order $order
      * @param string    $merchant_id
      * @param string    $conversion_action_id Numeric ID or full resource name.
      * @param bool      $marketing_consent
-     * @param array     $options              Optional keys: 'action_type', 'conversion_value', 'order_id_prefix', 'validate_only'.
+     * @param array     $options              Optional keys: 'action_type', 'conversion_value', 'order_id_prefix', 'validate_only', 'allow_without_click_id'.
      * @return array|false
      */
     private function build_payload($order, $merchant_id, $conversion_action_id, $marketing_consent, $options = array())
@@ -1472,8 +1722,9 @@ class Woo_Gads_Api
         $gbraid = self::get_order_click_id($order, 'gbraid');
 
         $has_click_id = !empty($gclid) || !empty($wbraid) || !empty($gbraid);
+        $allow_without_click_id = !empty($options['allow_without_click_id']);
 
-        if (!$has_click_id) {
+        if (!$has_click_id && (!$allow_without_click_id || !$marketing_consent)) {
             return false;
         }
 
@@ -1514,30 +1765,20 @@ class Woo_Gads_Api
 
         // Consent Mode v2 Object
         $conversion['consent'] = array(
-            'adUserData' => $marketing_consent ? 'GRANTED' : 'DENIED',
-            'adPersonalization' => $marketing_consent ? 'GRANTED' : 'DENIED'
+            'adUserData'        => $marketing_consent ? 'GRANTED' : 'DENIED',
+            'adPersonalization' => $marketing_consent ? 'GRANTED' : 'DENIED',
         );
 
         // Enhanced Conversions User Data (Only if Consent is GRANTED)
         if ($marketing_consent) {
-            $user_identifier = array();
+            $contact_identifiers = self::build_contact_user_identifiers($order);
 
-            $email = method_exists($order, 'get_billing_email') ? $order->get_billing_email() : '';
-            if (!empty($email)) {
-                $user_identifier[] = array(
-                    'userIdentifierSource' => 'FIRST_PARTY',
-                    'hashedEmail' => hash('sha256', strtolower(trim($email)))
-                );
+            // Without a click ID, require at least one primary hashed contact identifier (email or E.164 phone)
+            if (!$has_click_id && empty($contact_identifiers)) {
+                return false;
             }
 
-            $phone = method_exists($order, 'get_billing_phone') ? $order->get_billing_phone() : '';
-            if (!empty($phone)) {
-                $clean_phone = ltrim(trim($phone), '+');
-                $user_identifier[] = array(
-                    'userIdentifierSource' => 'FIRST_PARTY',
-                    'hashedPhoneNumber' => hash('sha256', $clean_phone)
-                );
-            }
+            $user_identifier = $contact_identifiers;
 
             $first_name = method_exists($order, 'get_billing_first_name') ? $order->get_billing_first_name() : '';
             $last_name = method_exists($order, 'get_billing_last_name') ? $order->get_billing_last_name() : '';
@@ -1545,7 +1786,7 @@ class Woo_Gads_Api
             if (!empty($first_name) && !empty($last_name)) {
                 $address = array(
                     'hashedFirstName' => hash('sha256', strtolower(trim($first_name))),
-                    'hashedLastName' => hash('sha256', strtolower(trim($last_name))),
+                    'hashedLastName'  => hash('sha256', strtolower(trim($last_name))),
                 );
 
                 $country = method_exists($order, 'get_billing_country') ? $order->get_billing_country() : '';
@@ -1556,7 +1797,7 @@ class Woo_Gads_Api
                     $address['postalCode'] = $zip;
                     $user_identifier[] = array(
                         'userIdentifierSource' => 'FIRST_PARTY',
-                        'addressInfo' => $address
+                        'addressInfo'          => $address,
                     );
                 }
             }

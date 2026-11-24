@@ -2,14 +2,14 @@
 # This file is distributed under the same license as the Woo Google Ads Server-Side Tracking plugin.
 msgid ""
 msgstr ""
-"Project-Id-Version: Woo Google Ads Server-Side Tracking 1.6.0\n"
+"Project-Id-Version: Woo Google Ads Server-Side Tracking 1.6.1\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/woo-google-ads-tracking-server-side\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-11-11T20:14:12+00:00\n"
+"POT-Creation-Date: 2026-11-24T11:09:02+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: woo-gads-server-side\n"
@@ -39,47 +39,47 @@ msgstr ""
 msgid "Google Ads Server-Side"
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:163
-#: admin/class-woo-gads-admin.php:188
-#: admin/class-woo-gads-admin.php:274
+#: admin/class-woo-gads-admin.php:164
+#: admin/class-woo-gads-admin.php:189
+#: admin/class-woo-gads-admin.php:275
 msgid "Permission denied."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:170
+#: admin/class-woo-gads-admin.php:171
 msgid "Connection successful! Access token retrieved."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:172
+#: admin/class-woo-gads-admin.php:173
 msgid "Connection failed. Please check your OAuth credentials."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:178
+#: admin/class-woo-gads-admin.php:179
 msgid "Settings"
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:193
+#: admin/class-woo-gads-admin.php:194
 msgid "Invalid order ID."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:200
+#: admin/class-woo-gads-admin.php:201
 msgid "Order not found or unsupported order type (refunds cannot be resent)."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:207
+#: admin/class-woo-gads-admin.php:208
 msgid "This order does not use a configured quote / lead payment method."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:224
+#: admin/class-woo-gads-admin.php:225
 msgid "Quote / Lead conversion tracking is currently disabled in plugin settings."
 msgstr ""
 
-#: admin/class-woo-gads-admin.php:228
-#: admin/class-woo-gads-admin.php:265
+#: admin/class-woo-gads-admin.php:229
+#: admin/class-woo-gads-admin.php:266
 msgid "Unknown status"
 msgstr ""
 
 #. translators: 1: Order ID, 2: Payment method slug
-#: admin/class-woo-gads-admin.php:239
+#: admin/class-woo-gads-admin.php:240
 #, php-format
 msgid "Refused for Purchases: order #%1$d uses unpaid quote payment method \"%2$s\" (Status: Ignoré (devis, non payé))."
 msgstr ""
@@ -92,38 +92,38 @@ msgstr ""
 msgid "Google Ads API validates every conversion request without recording conversions in your Google Ads account. Disable Test Mode in Configuration once your validation tests are complete."
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:387
-#: admin/partials/woo-gads-admin-logs.php:578
+#: admin/partials/woo-gads-admin-logs.php:390
+#: admin/partials/woo-gads-admin-logs.php:587
 msgid "Quote"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:437
+#: admin/partials/woo-gads-admin-logs.php:446
 msgid "Purchase:"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:453
+#: admin/partials/woo-gads-admin-logs.php:462
 msgid "Quote:"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:461
-#: admin/partials/woo-gads-admin-logs.php:615
+#: admin/partials/woo-gads-admin-logs.php:470
+#: admin/partials/woo-gads-admin-logs.php:626
 msgid "Resend"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:463
-#: admin/partials/woo-gads-admin-logs.php:617
+#: admin/partials/woo-gads-admin-logs.php:472
+#: admin/partials/woo-gads-admin-logs.php:628
 msgid "Resend Quote"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:465
+#: admin/partials/woo-gads-admin-logs.php:474
 msgid "Meta details"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:540
+#: admin/partials/woo-gads-admin-logs.php:549
 msgid "Type"
 msgstr ""
 
-#: admin/partials/woo-gads-admin-logs.php:580
+#: admin/partials/woo-gads-admin-logs.php:589
 msgid "Purchase"
 msgstr ""
 
@@ -188,14 +188,26 @@ msgid "Quote Trigger Statuses:"
 msgstr ""
 
 #: admin/partials/woo-gads-admin-settings.php:435
-msgid "API Test Mode (validateOnly)"
+msgid "Conversions Without Click ID (ECL)"
 msgstr ""
 
 #: admin/partials/woo-gads-admin-settings.php:440
-msgid "Enable validateOnly mode (validate payloads without recording conversions in Google Ads)"
+msgid "Also send orders without a click ID (Enhanced Conversions for Leads)"
 msgstr ""
 
 #: admin/partials/woo-gads-admin-settings.php:443
+msgid "Disabled by default. When enabled, orders without gclid/wbraid/gbraid are sent to Google Ads only if marketing consent is granted AND at least one hashed identifier (email or E.164 phone) is available. Uses distinct status \"Envoyé (sans click ID, données hachées)\" and keeps orderId for deduplication. Activate only on accounts where Customer Data Terms are accepted and Enhanced Conversions for Leads diagnostics require it."
+msgstr ""
+
+#: admin/partials/woo-gads-admin-settings.php:448
+msgid "API Test Mode (validateOnly)"
+msgstr ""
+
+#: admin/partials/woo-gads-admin-settings.php:453
+msgid "Enable validateOnly mode (validate payloads without recording conversions in Google Ads)"
+msgstr ""
+
+#: admin/partials/woo-gads-admin-settings.php:456
 msgid "Adds \"validateOnly\": true to uploadClickConversions requests. Ideal for testing Purchase and Quote flows in local/staging environments before going live."
 msgstr ""
 

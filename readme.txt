@@ -4,7 +4,7 @@ Tags: woocommerce, google ads, tracking, server-side
 Requires at least: 5.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.6.0
+Stable tag: 1.6.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,11 @@ This plugin allows you to send WooCommerce conversions directly to the Google Ad
 3. Use the Settings->Woo Google Ads Tracking screen to configure the plugin.
 
 == Changelog ==
+
+= 1.6.1 =
+* Option d'envoi des commandes sans identifiant de clic (`send_without_click_id`, désactivée par défaut) : Nouveau réglage « Envoyer aussi les commandes sans identifiant de clic (conversions améliorées pour les prospects) » répondant au diagnostic Google Ads *Importing limited user-provided data*. Lorsqu'il est activé sur un site éligible, les commandes et demandes de devis dépourvues de `gclid`/`wbraid`/`gbraid` sont transmises uniquement si le consentement marketing est accordé (`GRANTED`) ET qu'au moins un identifiant de contact haché (e-mail ou téléphone E.164) est présent, tout en conservant `orderId` (`devis-{id}` pour les devis) et le statut distinct `Envoyé (sans click ID, données hachées)`.
+* Normalisation stricte des téléphones au format international E.164 avec le `+` avant hachage SHA-256 (`Woo_Gads_Api::normalize_phone_e164`) : Suppression des espaces, espaces insécables, points, tirets et parenthèses ; conversion des préfixes ARCEP Océan Indien (`0692`, `0693`, `0262`, `0263`, `0639`, `0269`) vers `+262` sans jamais les confondre avec `+33` ; conversion des numéros métropolitains (`06`, `07`, `01`–`05`, `09` + pays `FR`, ainsi que les mobiles métropolitains `06`/`07` utilisés à La Réunion) vers `+33` ; maintien des numéros déjà au format `+XX` valide et exclusion des formats non reconnus.
+* Compatibilité `addressInfo` validée sur l'API Google Ads v23 (`validateOnly`) : Envoi conservé sur les `ClickConversion` avec ou sans click ID, assorti d'un repli automatique résilient sur `hashedEmail`/`hashedPhoneNumber` si un compte rejette `addressInfo` et d'un verrouillage du repli Click ID seul (`CUSTOMER_NOT_ACCEPTED_CUSTOMER_DATA_TERMS`) aux seules conversions disposant d'un Click ID.
 
 = 1.6.0 =
 * Verrou anti-faux achats sur les devis (« Verrou A ») : Nouveau réglage « Moyens de paiement de type devis / lead » (par défaut `we_quote_request`, filtrable via `woo_gads_lead_payment_methods`). Toute commande utilisant l'un de ces moyens de paiement ne déclenche plus JAMAIS l'action Achats — quel que soit son statut (`on-hold`, `processing`, `completed`) et même avec un renvoi manuel forcé (`$force = true`) — sauf si la commande est réellement payée (`$order->is_paid()` ou `get_date_paid()` non nul). Statut enregistré : `Ignoré (devis, non payé)` sans jamais altérer `_gads_api_sent`.

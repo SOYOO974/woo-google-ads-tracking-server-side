@@ -432,6 +432,19 @@ $settings = get_option('woo_gads_settings');
             </td>
         </tr>
         <tr>
+            <th scope="row"><?php echo esc_html__('Conversions Without Click ID (ECL)', 'woo-gads-server-side'); ?></th>
+            <td>
+                <?php $send_without_click_id_checked = !empty($settings['send_without_click_id']) && (string) $settings['send_without_click_id'] !== '0'; ?>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                    <input type="checkbox" name="woo_gads_settings[send_without_click_id]" id="woo_gads_send_without_click_id" value="1" <?php checked($send_without_click_id_checked); ?> />
+                    <strong><?php echo esc_html__('Also send orders without a click ID (Enhanced Conversions for Leads)', 'woo-gads-server-side'); ?></strong>
+                </label>
+                <p class="description" style="margin-top: 5px;">
+                    <?php echo esc_html__('Disabled by default. When enabled, orders without gclid/wbraid/gbraid are sent to Google Ads only if marketing consent is granted AND at least one hashed identifier (email or E.164 phone) is available. Uses distinct status "Envoyé (sans click ID, données hachées)" and keeps orderId for deduplication. Activate only on accounts where Customer Data Terms are accepted and Enhanced Conversions for Leads diagnostics require it.', 'woo-gads-server-side'); ?>
+                </p>
+            </td>
+        </tr>
+        <tr>
             <th scope="row"><?php echo esc_html__('API Test Mode (validateOnly)', 'woo-gads-server-side'); ?></th>
             <td>
                 <?php $validate_only_checked = !empty($settings['validate_only']) && (string) $settings['validate_only'] !== '0'; ?>
